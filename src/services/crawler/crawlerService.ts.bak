@@ -412,7 +412,7 @@ class CrawlerService {
       
       // Before extraction, check if the page is a bot protection page
       const isBotPage = await this.isBotProtectionPage(page);
-      if (isBotPage === true) {
+      if (isBotPage) {
         throw new Error('Bot protection detected. The site may be blocking automated access.');
       }
       
@@ -1000,101 +1000,34 @@ class CrawlerService {
     try {
       logger.info(`Extracting data from page: ${task.url}`);
       
-      // Step 1: Extract structured data from meta tags, JSON-LD, and microdata
+      // First try to extract structured data (JSON-LD, microdata)
       const structuredData = await this.extractStructuredData(page);
       if (structuredData) {
         logger.info('Found structured product data on page');
         Object.assign(productData, structuredData);
       }
 
-      // Step 2: Extract product price information using the enhanced method
-      try {
-        const priceData = await this.extractProductPrices(page);
-        if (priceData && priceData.price !== undefined) {
-          productData.price = priceData.price;
-          logger.info(`Found enhanced price: ${productData.price}`);
-          
-          // Add currency if available
-          if (priceData.currency) {
-            productData.currency = priceData.currency;
-            logger.info(`Found currency: ${productData.currency}`);
-          }
-          
-          // Add additional price information to metadata
-          if (!productData.metadata) {
-            productData.metadata = {};
-          }
-          
-          if (priceData.priceRange) {
-            productData.metadata.price_min = priceData.priceRange.min;
-            productData.metadata.price_max = priceData.priceRange.max;
-            productData.metadata.price_range = `${priceData.priceRange.min} - ${priceData.priceRange.max}`;
-          }
-          
-          if (priceData.discountedFrom) {
-            productData.metadata.original_price = priceData.discountedFrom;
-            productData.metadata.discount_amount = priceData.discountedFrom - priceData.price;
-            productData.metadata.discount_percentage = Math.round((priceData.discountedFrom - priceData.price) / priceData.discountedFrom * 100);
-          }
-          
-          if (priceData.salePrices && Object.keys(priceData.salePrices).length > 0) {
-            productData.metadata.variant_prices = priceData.salePrices;
-          }
-        } else {
-          logger.warn('Could not extract price from page');
-        }
-      } catch (priceError) {
-        logger.error(`Error extracting price data: ${priceError}`);
-      }
-
-      // Step 3: Extract product name
+      // Extract product name
       if (selectors.name) {
         const productName = await this.getTextContent(page, selectors.name);
         productData.productName = productName || undefined;
       } else {
         // Enhanced list of selectors for product name
         const productNameSelectors = [
-          // Generic product name selectors
-          'h1.product-title',
-          'h1.product-name',
-          'h1.product_title',
-          'h1.product-single__title',
-          'h1.productName',
-          'h1[itemprop="name"]',
-          
-          // E-commerce platform specific
           '#productTitle', // Amazon
-          '.product-info-main .page-title', // Magento
-          '.product-single__title', // Shopify
-          '.product-title', // WooCommerce
-          '.product_name', // BigCommerce
-          '.product-details h1', // eBay
-          '.prod-ProductTitle', // Walmart
-          '.product-name', // Target
-          '.ty-product-block-title', // Various platforms
-          '.summary h1', // WooCommerce alternative
-          '.name h1', // PrestaShop
-          'h1.title', // Many themes
-          'h1.heading-title', // OpenCart
-          '.product-info h1', // OpenCart alternative
-          
-          // Vietnamese e-commerce platforms
-          '.product_name', // Tiki
-          '.style__ProductTitle-sc-12gwsc8-0', // Shopee (dynamic class)
-          '.style-xfvybb', // Shopee alternative
-          '.product-title', // Lazada
-          'h1.pdp-mod-product-badge-title', // Lazada alternative
-          
-          // Generic fallbacks
+          '.product-title',
+          '.product-name',
           '[itemprop="name"]',
+          'h1.product-single__title',
+          '.product-detail__name',
+          '.pdp-name',
+          '.product_title', // WooCommerce
           '.product-info h1',
           '[data-testid="product-title"]',
           '[data-product-title]',
           '.productName',
-          '.title[itemprop="name"]',
-          '.product-header__title',
-          'h1.name',
-          'h1' // Last resort - any h1 tag
+          // Fall back to any h1
+          'h1', 
         ];
         
         for (const selector of productNameSelectors) {
@@ -1102,7 +1035,6 @@ class CrawlerService {
           if (productName) {
             // Clean up the product name (remove site name, etc.)
             productData.productName = this.cleanProductName(productName);
-            logger.info(`Found product name: ${productData.productName} using selector: ${selector}`);
             break;
           }
         }
@@ -1112,38 +1044,354 @@ class CrawlerService {
           const h1Text = await this.getTextContent(page, 'h1');
           const h1Product = h1Text || await page.title();
           productData.productName = this.cleanProductName(h1Product);
-          logger.info(`Using page title as product name: ${productData.productName}`);
         }
       }
+      
+      logger.info(`Found product name: ${productData.productName || 'Unknown'}`);
+      
+      // Extract price with enhanced methods
+      if (selectors.price) {
+        const priceText = await this.getTextContent(page, selectors.price);
+        productData.price = this.extractPriceValue(priceText || '');
+      } else {
+        // Enhanced list of selectors for price
+        const priceSelectors = [
+          '.a-price .a-offscreen', // Amazon
+          '.a-price-whole', // Amazon
+          '#priceblock_ourprice', // Amazon
+          '#price_inside_buybox', // Amazon
+          '.pricing span', // Amazon pricing
+          '.pricing strong', // Amazon pricing alt
+          '[data-a-color="price"] span', // Amazon contemporary price
+          '.a-color-price', // Amazon general price color
+          '.price-current', 
+          '.product-price', 
+          '[itemprop="price"]',
+          '[data-product-price]',
+          '[data-price]',
+          '.price-new',
+          '.current-price',
+          '.sale-price',
+          '.product-details__price',
+          '.pdp-price',
+          '.product-price-value',
+          '.price-value',
+          '.regular-price',
+          '.offer-price',
+          '.woocommerce-Price-amount', // WooCommerce
+          'meta[property="product:price:amount"]', // Open Graph
+          'meta[property="og:price:amount"]', // Open Graph
+        ];
+        
+        for (const selector of priceSelectors) {
+          try {
+            let priceText = '';
+            if (selector.startsWith('meta')) {
+              priceText = await page.$eval(selector, (el) => el.getAttribute('content') || '').catch(() => '');
+            } else {
+              priceText = await this.getTextContent(page, selector) || '';
+            }
+            
+            if (priceText) {
+              productData.price = this.extractPriceValue(priceText);
+              logger.info(`Found price: ${productData.price}`);
+              break;
+            }
+          } catch (error) {
+            // Continue to next selector
+            continue;
+          }
+        }
+        
+        // If still no price found, try to extract from product options
+        if (productData.price === undefined) {
+          try {
+            // Look for prices in product options or variants
+            const prices = await page.evaluate(() => {
+              // For Amazon-specific option price extraction
+              let allPrices = [];
+              
+              // Amazon product variation specific selectors
+              // Method 1: Product variation grid
+              try {
+                const variationGrid = document.querySelector('#twister, .twister-plus-inline-div');
+                if (variationGrid) {
+                  // Get all variation buttons/options that contain prices
+                  const variationButtons = variationGrid.querySelectorAll('li[data-asin], [id*="variation"] li, [id*="variation-button"]');
+                  
+                  for (const button of variationButtons) {
+                    // Look for price tags within each variation option
+                    const priceElement = button.querySelector('.a-price .a-offscreen, .a-color-price, .a-price');
+                    if (priceElement && priceElement.textContent) {
+                      allPrices.push(priceElement.textContent.trim());
+                    }
+                  }
+                }
+              } catch (e) {
+                // Continue with other methods
+              }
+              
+              // Method 2: Size/variant dropdown with prices
+              try {
+                const sizeOptions = document.querySelectorAll('#variation_size_name .a-dropdown-item, #variation_style_name .a-dropdown-item');
+                for (const option of sizeOptions) {
+                  const priceElement = option.querySelector('[class*="price"], .a-color-price');
+                  if (priceElement && priceElement.textContent) {
+                    const price = priceElement.textContent.trim();
+                    if (price.match(/[$£€]/)) { // Ensure it looks like a price
+                      allPrices.push(price);
+                    }
+                  }
+                }
+              } catch (e) {
+                // Continue with other methods
+              }
 
-      // Step 4: Extract brand information
+              // Method 3: Extract prices from product list pages
+              try {
+                const productItems = document.querySelectorAll('.product-item, .product-listing, [data-product-id]');
+                if (productItems.length > 0) {
+                  for (const item of productItems) {
+                    // Find price elements within product listings
+                    const priceElement = item.querySelector('.price, .product-price, [data-price]');
+                    if (priceElement && priceElement.textContent) {
+                      const price = priceElement.textContent.trim();
+                      if (/[$£€]\s*\d+\.?\d*|\d+\.?\d*\s*[$€£]/.test(price)) {
+                        allPrices.push(price);
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                // Continue with other methods
+              }
+              
+              // Method 4: Extract prices from structured markup
+              try {
+                // Look for prices in structured data elements
+                const priceNodes = document.querySelectorAll('[itemprop="price"], [data-price], [data-product-price]');
+                for (const node of priceNodes) {
+                  let priceValue = '';
+                  // Check if price is in content attribute (common for meta tags)
+                  if (node.hasAttribute('content')) {
+                    priceValue = node.getAttribute('content') || '';
+                  } else {
+                    priceValue = node.textContent?.trim() || '';
+                  }
+                  
+                  if (priceValue && /^\d+\.?\d*$/.test(priceValue) || /[$£€]\s*\d+\.?\d*|\d+\.?\d*\s*[$€£]/.test(priceValue)) {
+                    allPrices.push(priceValue);
+                  }
+                }
+              } catch (e) {
+                // Continue with other methods
+              }
+              
+              // Method 5: Extract prices from price range displays
+              try {
+                // Look for elements that might contain price ranges
+                const priceRangeElements = document.querySelectorAll('.price-range, .price-min, .price-max, [data-price-range]');
+                for (const el of priceRangeElements) {
+                  const text = el.textContent?.trim() || '';
+                  // Check for patterns like "$10 - $20" or "From $10"
+                  if (/[$€£]\s*\d+\.?\d*\s*-\s*[$€£]\s*\d+\.?\d*/.test(text) || 
+                      /from\s*[$€£]\s*\d+\.?\d*/i.test(text)) {
+                    // Extract all numbers that look like prices
+                    const matches = text.match(/[$€£]\s*\d+\.?\d*|\d+\.?\d*\s*[$€£]/g);
+                    if (matches) {
+                      matches.forEach(match => allPrices.push(match));
+                    }
+                  }
+                }
+              } catch (e) {
+                // Continue with other methods
+              }
+
+              // Method 6: Extract prices from HTML tables
+              try {
+                // Find tables that might contain product prices
+                const tables = document.querySelectorAll('table');
+                for (const table of tables) {
+                  // Look for tables with price-related headers
+                  const tableText = table.textContent?.toLowerCase() || '';
+                  if (tableText.includes('price') || 
+                      tableText.includes('cost') || 
+                      tableText.includes('$') || 
+                      tableText.includes('€') || 
+                      tableText.includes('£')) {
+                    
+                    // Extract all cells that might contain prices
+                    const cells = table.querySelectorAll('td, th');
+                    for (const cell of cells) {
+                      const cellText = cell.textContent?.trim() || '';
+                      // Check if this cell contains currency symbols or price-like patterns
+                      if (/[$€£]\s*\d+\.?\d*|\d+\.?\d*\s*[$€£]/.test(cellText)) {
+                        allPrices.push(cellText);
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                // Continue with other methods
+              }
+              
+              return allPrices;
+            });
+            
+            if (prices && prices.length > 0) {
+              // Filter out empty or null values and extract valid prices
+              const validPrices = prices
+                .filter(p => p && p.trim().length > 0)
+                .map(p => this.extractPriceValue(p || ''))
+                .filter(p => p !== undefined && p > 0) as number[];
+              
+              if (validPrices.length > 0) {
+                // Use the lowest price as the primary price
+                productData.price = Math.min(...validPrices);
+                
+                // Store price range in metadata
+                if (!productData.metadata) {
+                  productData.metadata = {};
+                }
+                
+                productData.metadata.price_min = Math.min(...validPrices);
+                productData.metadata.price_max = Math.max(...validPrices);
+                productData.metadata.price_options = validPrices.length;
+                productData.metadata.price_all_options = validPrices.join(', ');
+                
+                logger.info(`Found ${validPrices.length} variant prices ranging from ${productData.metadata.price_min} to ${productData.metadata.price_max}`);
+              }
+            }
+          } catch (error) {
+            logger.warn(`Error extracting option prices: ${error}`);
+          }
+          }
+        }
+        
+        // If still no price found, try any element with a $ symbol
+        if (productData.price === undefined) {
+          try {
+            const dollarPrice = await page.evaluate(() => {
+              const elements = Array.from(document.querySelectorAll('*'));
+              for (const el of elements) {
+                if (el.textContent && /[$£€]\s*\d+(\.\d{2})?/.test(el.textContent)) {
+                  // Check if this element appears to be a product price (not shipping or other costs)
+                  const elText = el.textContent.toLowerCase();
+                  if (!elText.includes('shipping') && !elText.includes('tax') && 
+                      !elText.includes('handling') && !elText.includes('fee')) {
+                  return el.textContent.trim();
+                  }
+                }
+              }
+              return null;
+            });
+            
+            if (dollarPrice) {
+              productData.price = this.extractPriceValue(dollarPrice);
+            }
+          } catch (error) {
+            logger.warn(`Error finding dollar price: ${error}`);
+          }
+        }
+      
+      // If still no price, try to find price from JSON data in the page
+      if (productData.price === undefined) {
+        try {
+          const jsonPrice = await page.evaluate(() => {
+            // Look for JSON data in script tags
+            const scripts = document.querySelectorAll('script[type="application/ld+json"], script[type="application/json"]');
+            for (const script of scripts) {
+              try {
+                const json = JSON.parse(script.textContent || '{}');
+                
+                // Look for price in various JSON structures
+                if (json.offers?.price) return json.offers.price;
+                if (json.price) return json.price;
+                if (json.offers?.highPrice) return json.offers.highPrice;
+                if (json.offers?.lowPrice) return json.offers.lowPrice;
+                
+                // Amazon often has prices in JSON structures
+                if (json.asin && json.price) return json.price;
+              } catch (e) {
+                // Ignore JSON parsing errors
+              }
+            }
+            return null;
+          });
+          
+          if (jsonPrice && typeof jsonPrice === 'number' || typeof jsonPrice === 'string') {
+            productData.price = typeof jsonPrice === 'number' 
+              ? jsonPrice 
+              : this.extractPriceValue(String(jsonPrice));
+            
+            logger.info(`Found price from JSON data: ${productData.price}`);
+          }
+        } catch (error) {
+          logger.warn(`Error extracting price from JSON: ${error}`);
+        }
+      }
+      
+      // Extract currency
+      try {
+        const currencySelectors = [
+          'meta[property="product:price:currency"]',
+          'meta[property="og:price:currency"]',
+          '[itemprop="priceCurrency"]'
+        ];
+        
+        for (const selector of currencySelectors) {
+          let currencyText = '';
+          if (selector.startsWith('meta')) {
+            currencyText = await page.$eval(selector, (el) => el.getAttribute('content') || '').catch(() => '');
+          } else {
+            currencyText = await this.getTextContent(page, selector) || '';
+          }
+          
+          if (currencyText && currencyText.trim()) {
+            productData.currency = currencyText.trim();
+            break;
+          }
+        }
+        
+        // If no currency found, try to infer from price text or URL
+        if (!productData.currency) {
+          const pageUrl = page.url().toLowerCase();
+          if (pageUrl.includes('.co.uk') || pageUrl.includes('/uk/')) {
+            productData.currency = 'GBP';
+          } else if (pageUrl.includes('.ca') || pageUrl.includes('/ca/')) {
+            productData.currency = 'CAD';
+          } else if (pageUrl.includes('.eu') || 
+                     pageUrl.includes('.de') || 
+                     pageUrl.includes('.fr') || 
+                     pageUrl.includes('.it') || 
+                     pageUrl.includes('.es')) {
+            productData.currency = 'EUR';
+          } else {
+            // Default to USD
+            productData.currency = 'USD';
+          }
+        }
+      } catch (error) {
+        logger.warn(`Error extracting currency: ${error}`);
+      }
+      
+      // Extract brand
       if (selectors.brand) {
         const brandText = await this.getTextContent(page, selectors.brand);
         productData.brand = brandText || undefined;
       } else {
         const brandSelectors = [
-          // Generic brand selectors
+          '#bylineInfo', // Amazon
+          '.product-byline a', // Amazon
+          '.po-brand .a-span9', // Amazon
+          '.po-brand .a-size-base', // Amazon
           '[itemprop="brand"]',
           '.brand',
           '.product-brand',
-          '.brand-name',
           '.manufacturer',
           'meta[property="product:brand"]',
-          
-          // E-commerce platform specific
-          '#bylineInfo', // Amazon
-          '.po-brand .a-span9', // Amazon
-          '.product-meta__vendor', // Shopify
-          '.product-brand', // WooCommerce
-          '.vendor', // BigCommerce
-          '[data-brand]', // Various platforms
-          '.prod-BrandName', // Walmart
-          
-          // Generic fallbacks
           '.product-detail__brand',
           '.pdp-brand',
-          '.product-producer',
-          '.product-vendor'
         ];
         
         for (const selector of brandSelectors) {
@@ -1158,32 +1406,13 @@ class CrawlerService {
             // Clean up the brand name (remove "Brand: " or "Visit the X Store" text)
             brandText = brandText.replace(/^Brand:\s*/i, '').replace(/Visit the\s+|\s+Store/ig, '');
             productData.brand = brandText.trim();
-            logger.info(`Found brand: ${productData.brand} using selector: ${selector}`);
+            logger.info(`Found brand: ${productData.brand}`);
             break;
-          }
-        }
-        
-        // Try to extract brand from URL if not found elsewhere
-        if (!productData.brand) {
-          const url = page.url().toLowerCase();
-          const brandFromUrl = await this.extractBrandFromUrl(url);
-          if (brandFromUrl) {
-            productData.brand = brandFromUrl;
-            logger.info(`Extracted brand from URL: ${productData.brand}`);
-          }
-        }
-        
-        // Try to extract brand from product name if still not found
-        if (!productData.brand && productData.productName) {
-          const brandFromName = this.extractBrandFromProductName(productData.productName);
-          if (brandFromName) {
-            productData.brand = brandFromName;
-            logger.info(`Extracted brand from product name: ${productData.brand}`);
           }
         }
       }
       
-      // Step 5: Extract product description
+      // Extract description
       if (selectors.description) {
         const description = await this.getTextContent(page, selectors.description);
         productData.description = description || undefined;
@@ -1193,96 +1422,134 @@ class CrawlerService {
         
         // Default: Look for common description selectors
         const descriptionSelectors = [
-          // Amazon selectors
           '#feature-bullets', // Amazon bullet points
           '#productDescription', // Amazon description
-          '#productDetails_techSpec_section_1', // Amazon tech specs
+          '.product-facts', // Amazon
+          '.product-description', // Amazon
+          '#productDescription_feature_div', // Amazon feature div
           '#productDetails_feature_div', // Amazon details
           '#detailBullets_feature_div', // Amazon detail bullets
           '#aplus_feature_div', // Amazon A+ content
           '#aplus3p_feature_div', // Amazon A+ extra content
-          '#descriptionAndDetails', // Amazon description container
           '.a-expander-content', // Amazon expandable content
-          '#productOverview_feature_div', // Amazon product overview
-          '#dpx-itm-features', // Amazon features
-          
-          // Generic selectors
+          'meta[name="description"]',
           '[itemprop="description"]',
           '.product-description',
-          '.product-short-description',
-          '.short-description',
-          '.full-description',
+          '#product-description',
+          '.description',
+          '.prod-description',
           '.product__description',
-          '.product-info__description',
-          '.product-details',
-          '.product-overview',
-          '.prod-ProductOverview',
-          
-          // E-commerce platform specific
-          '.product-info-main .description', // Magento
-          '.product-single__description', // Shopify
-          '.summary .woocommerce-product-details__short-description', // WooCommerce
-          '.product_description', // BigCommerce
-          '.product-info-description', // PrestaShop
-          '.prodDetailSec', // eBay
-          
-          // Vietnamese e-commerce platforms
-          '.product-description', // Tiki
-          '.style__Description-sc-12gwsc8-7', // Shopee (dynamic class)
-          '.pdp-product-desc', // Lazada
-          '.pdp-mod-product-info-description', // Lazada alternative
-          
-          // Generic content blocks
-          '.tab-content',
-          '.tab-pane',
-          '.prod-tabs',
-          '.product-summary',
-          
-          // Fallback - any description-like blocks
-          'meta[name="description"]',
-          'meta[property="og:description"]',
-          '[data-description]',
-          '#description'
+          '.pdp-description',
         ];
         
-        // Try to collect text from all selectors
-          for (const selector of descriptionSelectors) {
-          let descriptionText = '';
-              if (selector.startsWith('meta')) {
-            // Extract from meta tags
-            descriptionText = await page.$eval(selector, (el) => el.getAttribute('content') || '').catch(() => '');
-              } else {
-            // Extract text content from regular elements
-            descriptionText = await this.getTextContent(page, selector) || '';
-          }
-          
-          if (descriptionText && descriptionText.length > 20) { // Only add if meaningful
-            // Avoid duplicate content - check if it's already in the combined description
-            if (!combinedDescription.includes(descriptionText)) {
-                  if (combinedDescription) {
-                    combinedDescription += '\n\n';
-                  }
-              combinedDescription += descriptionText.trim();
+        for (const selector of descriptionSelectors) {
+          try {
+            let description = '';
+            if (selector.startsWith('meta')) {
+              description = await page.$eval(selector, (el) => el.getAttribute('content') || '').catch(() => '');
+            } else {
+              const textContent = await this.getTextContent(page, selector);
+              description = textContent || '';
             }
             
-            // If we already have a substantial description, stop collecting
-            if (combinedDescription.length > 1000) {
-                    break;
-                  }
+            if (description && description.trim()) {
+              // Only add the description if it adds new content
+              if (!combinedDescription.includes(description.trim())) {
+                if (combinedDescription) {
+                  combinedDescription += '\n\n';
                 }
+                combinedDescription += description.trim();
               }
+            }
+          } catch (error) {
+            // Continue to next selector
+            continue;
+          }
+        }
+        
+        // Special handling for Amazon bullet points
+        try {
+          const bulletPoints = await page.$$eval('#feature-bullets li', (bullets) => {
+            return bullets.map(bullet => bullet.textContent?.trim()).filter(Boolean);
+          }).catch(() => []);
+          
+          if (bulletPoints.length > 0) {
+            if (combinedDescription) combinedDescription += '\n\n';
+            combinedDescription += 'Key Features:\n• ' + bulletPoints.join('\n• ');
+          }
+        } catch (error) {
+          // Ignore errors with bullet points
+        }
+        
+        // Extract technical details for electronics
+        try {
+          const technicalDetails = await this.extractTechnicalDetails(page);
+          if (technicalDetails && Object.keys(technicalDetails).length > 0) {
+            if (combinedDescription) combinedDescription += '\n\n';
+            combinedDescription += 'Technical Specifications:\n';
+            
+            for (const [key, value] of Object.entries(technicalDetails)) {
+              combinedDescription += `• ${key}: ${value}\n`;
               
-        // Clean up the combined description
-                  if (combinedDescription) {
-          productData.description = this.cleanDescription(combinedDescription);
-          logger.info(`Found product description with ${productData.description.length} characters`);
+              // Also add to metadata
+              if (!productData.metadata) {
+                productData.metadata = {};
+              }
+              productData.metadata[key.toLowerCase().replace(/\s+/g, '_')] = value;
+            }
+            
+            // Log technical details count and key specs
+            logger.info(`Found ${Object.keys(technicalDetails).length} technical details`);
+            const keySpecs = ['brand', 'model', 'screen_size', 'memory', 'cpu', 'os', 'ram_memory_installed_size'];
+            const foundKeySpecs = keySpecs.filter(key => technicalDetails[key]).map(key => `${key}: ${technicalDetails[key]}`);
+            if (foundKeySpecs.length > 0) {
+              logger.info(`Key specifications: ${foundKeySpecs.join(', ')}`);
+            }
+          }
+        } catch (error) {
+          logger.warn(`Error extracting technical details: ${error}`);
+        }
+        
+        if (combinedDescription) {
+          productData.description = this.cleanDescription(combinedDescription.trim());
+          logger.info(`Found combined description of length: ${productData.description.length}`);
         }
       }
       
-      // Step 6: Extract product images with enhanced methods
-      await this.extractEnhancedImages(page, productData);
+      // Extract images
+      if (selectors.image) {
+        const imageUrls = await this.extractImages(page, selectors.image, task.url);
+        if (imageUrls.length > 0) {
+          productData.images = this.deduplicateImages(imageUrls);
+        }
+      } else {
+        // Default: Look for product images
+        const imageSelectors = [
+          '#landingImage', // Amazon
+          '#imgTagWrapperId img', // Amazon
+          '.imgTagWrapper img', // Amazon
+          '.image-gallery-image img', // Amazon
+          '.product-image img', 
+          '#product-image img', 
+          '[itemprop="image"]', 
+          '.gallery img', 
+          '.product-gallery img',
+          '.carousel img',
+          '.pdp-carousel img',
+          '.product__media img',
+          '.product-single__media img',
+          '.product-images-container img',
+          'meta[property="og:image"]',
+        ];
+        
+        const imageUrls = await this.extractImagesFromMultipleSelectors(page, imageSelectors, task.url);
+        if (imageUrls.length > 0) {
+          productData.images = this.deduplicateImages(imageUrls);
+          logger.info(`Found ${productData.images.length} images`);
+        }
+      }
       
-      // Step 7: Extract ingredients
+      // Extract ingredients
       if (selectors.ingredients) {
         const ingredientsText = await this.getTextContent(page, selectors.ingredients);
         if (ingredientsText) {
@@ -2531,196 +2798,29 @@ class CrawlerService {
   private extractPriceValue(priceText: string): number | undefined {
     if (!priceText) return undefined;
     
-    try {
-      // Log the original price text for debugging
-      logger.debug(`Extracting price from: ${priceText}`);
-      
-      // Handle null/undefined values
-      if (!priceText || typeof priceText !== 'string') return undefined;
-      
-      // Replace currency symbols for better parsing
-      let cleanedText = priceText.trim();
-      
-      // Handle price ranges - choose the lower price
-      if (cleanedText.includes('-') || cleanedText.includes('–') || cleanedText.includes('~')) {
-        const parts = cleanedText.split(/[-–~]/);
-        cleanedText = parts[0].trim(); // Take the first/lower price
-      }
-      
-      // Handle "From" price formats
-      if (/from|starting at|as low as|starting from|from only|giá từ|giá chỉ từ/i.test(cleanedText)) {
-        const fromMatch = cleanedText.match(/from\s*(?:[$€£₫¥₹₽₴₺₦₩₱₸₼₾])?(?:\s*)([\d\s.,]+)(?:\s*[$€£₫¥₹₽₴₺₦₩₱₸₼₾])?/i);
-        if (fromMatch && fromMatch[1]) {
-          cleanedText = fromMatch[1].trim();
-        } else {
-          // Try to extract the first number in the text
-          const numberMatch = cleanedText.match(/[\d.,]+/);
-          if (numberMatch) {
-            cleanedText = numberMatch[0].trim();
-          }
-        }
-      }
-      
-      // Handle discounted price formats - choose the current price, not original
-      if (cleanedText.includes('(') && cleanedText.includes(')')) {
-        // If parentheses contain terms like "was" or "original price", take price outside parentheses
-        const discountMatch = cleanedText.match(/([^()]+)\s*\((?:.*(?:was|original|reg|regular|retail|list|giá gốc|giá cũ).*)\)/i);
-        if (discountMatch && discountMatch[1]) {
-          cleanedText = discountMatch[1].trim();
-        }
-      }
-      
-      // Handle discount formats like "Save 20%" or "$10 off"
-      if (/save|off|discount|giảm|tiết kiệm/i.test(cleanedText)) {
-        // Try to find the current price, not the discount
-        const currentPriceMatch = cleanedText.match(/(?:price|now|only|just|giá)[\s:]*[$€£₫¥₹₽₴₺₦₩₱₸₼₾]?\s*([\d\s.,]+)/i);
-        if (currentPriceMatch && currentPriceMatch[1]) {
-          cleanedText = currentPriceMatch[1].trim();
-        } else {
-          // Look for price after discount notation
-          const afterDiscountMatch = cleanedText.match(/(?:off|discount|save)[\s:]*[$€£₫¥₹₽₴₺₦₩₱₸₼₾]?\s*([\d\s.,]+)/i);
-          if (afterDiscountMatch && afterDiscountMatch[1]) {
-            cleanedText = afterDiscountMatch[1].trim();
-          }
-        }
-      }
-      
-      // Handle "Sale" price formats
-      if (/sale|special|offer|deal|giảm giá|khuyến mãi/i.test(cleanedText)) {
-        // Find price after "sale" or similar words
-        const saleMatch = cleanedText.match(/(?:sale|special|offer|deal)[\s:]*[$€£₫¥₹₽₴₺₦₩₱₸₼₾]?\s*([\d\s.,]+)/i);
-        if (saleMatch && saleMatch[1]) {
-          cleanedText = saleMatch[1].trim();
-        }
-      }
-      
-      // First handle localized number formats with different thousand/decimal separators
-      const hasComma = cleanedText.includes(',');
-      const hasDot = cleanedText.includes('.');
-      
-      // Special handling for large numbers with commas as thousand separators
-      if (hasComma && !hasDot) {
-        // Check if this looks like a thousands separator (e.g., "20,900")
-        const commaPosition = cleanedText.lastIndexOf(',');
-        if (commaPosition > 0 && cleanedText.length - commaPosition == 4) {
-          // This is likely a thousands separator, remove it
-          cleanedText = cleanedText.replace(/,/g, '');
-        } else {
-          // This is likely a decimal separator, replace with dot
-          cleanedText = cleanedText.replace(/,/g, '.');
-        }
-      } 
-      else if (hasComma && hasDot) {
-        // If both separators exist, determine which is the thousands and which is the decimal
-        const lastCommaPosition = cleanedText.lastIndexOf(',');
-        const lastDotPosition = cleanedText.lastIndexOf('.');
-        
-        if (lastDotPosition > lastCommaPosition) {
-          // Format like "1,234.56" (US/UK)
-          cleanedText = cleanedText.replace(/,/g, '');
-        } else {
-          // Format like "1.234,56" (EU)
-          cleanedText = cleanedText.replace(/\./g, '').replace(',', '.');
-        }
-      }
-      
-      // Handle currency symbols and remove them
-      // Common currency symbols to remove before parsing
-      const currencySymbols = [
-        '₫', 'đ', 'VND', 'Đ', // Vietnamese Dong
-        '₹', 'Rs', 'INR', 'रु', // Indian Rupee
-        '¥', '円', 'JPY', // Japanese Yen
-        '₩', 'KRW', '원', // Korean Won
-        '$', 'USD', // US Dollar
-        '€', 'EUR', // Euro
-        '£', 'GBP', // British Pound
-        '฿', 'THB', // Thai Baht
-        '₽', 'RUB', // Russian Ruble
-        '₴', 'UAH', // Ukrainian Hryvnia
-        '₺', 'TRY', // Turkish Lira
-        '₦', 'NGN', // Nigerian Naira
-        'A$', 'AUD', // Australian Dollar
-        'C$', 'CAD', // Canadian Dollar
-        'NZ$', 'NZD', // New Zealand Dollar
-        'kr', 'DKK', 'SEK', 'NOK', // Scandinavian currencies
-        'zł', 'PLN', // Polish Zloty
-        'Kč', 'CZK', // Czech Koruna
-        'CHF', // Swiss Franc
-        'HK$', 'HKD' // Hong Kong Dollar
-      ];
-      
-      // Handle Vietnamese Dong and other currency formats with specific rules
-      if (/₫|đ|VND|Đ/.test(cleanedText)) {
-        // Vietnamese Dong typically uses dots for thousands and no decimal places
-        cleanedText = cleanedText.replace(/[₫đVNDĐ]/g, '').replace(/\./g, '');
-      }
-      // Handle Indian Rupee format (e.g., "₹1,23,456.78")
-      else if (/₹|Rs\.?|INR/.test(cleanedText)) {
-        cleanedText = cleanedText.replace(/[₹Rs\.INR]/g, '').replace(/,/g, '');
-      }
-      // Handle Japanese Yen and Korean Won (typically no decimal places)
-      else if (/¥|円|₩|KRW|JPY/.test(cleanedText)) {
-        cleanedText = cleanedText.replace(/[¥円₩KRW JPY]/g, '').replace(/,/g, '');
-      }
-      // Thai Baht
-      else if (/฿|THB|บาท/.test(cleanedText)) {
-        cleanedText = cleanedText.replace(/[฿THBบาท]/g, '').replace(/,/g, '');
-      }
-      // Remove all currency symbols as fallback
-      else {
-        for (const symbol of currencySymbols) {
-          cleanedText = cleanedText.replace(new RegExp(symbol, 'gi'), '');
-        }
-      }
-      
-      // Handle price with spaces between digits (common in some European formats)
-      cleanedText = cleanedText.replace(/\s+/g, '');
-      
-      // Now extract only numeric characters and decimal point
-      const numericMatch = cleanedText.match(/[\d.]+/);
-      if (!numericMatch) return undefined;
-      
-      cleanedText = numericMatch[0];
-      
-      // Parse the price value
-      const price = parseFloat(cleanedText);
-      
-      // Check if the price is valid and return it
-      if (isNaN(price)) {
-        logger.debug(`Failed to parse price from: ${priceText}`);
-        return undefined;
-      }
-      
-      // Check for unreasonable values 
-      if (price > 1000000000) {
-        logger.warn(`Unusually high price detected (${price}), might be parsing error for: ${priceText}`);
-        
-        // Try to intelligently fix extremely high prices
-        // For example, if the price is ¥1,000,000, it should be around $10,000
-        if (priceText.includes('¥') || priceText.includes('JPY') || priceText.includes('円')) {
-          const adjustedPrice = price / 100;
-          logger.info(`Adjusted JPY price from ${price} to ${adjustedPrice}`);
-          return adjustedPrice;
-        }
-        // For Vietnamese Dong, divide by 1000 to get a reasonable USD equivalent
-        if (priceText.includes('₫') || priceText.includes('VND') || priceText.includes('đ')) {
-          const adjustedPrice = price / 20000;
-          logger.info(`Adjusted VND price from ${price} to ${adjustedPrice}`);
-          return adjustedPrice;
-        }
-      }
-      
-      // Also check for suspiciously low prices (might be missing zeros)
-      if (price < 0.01 && (priceText.includes('$') || priceText.includes('€') || priceText.includes('£'))) {
-        logger.warn(`Unusually low price detected (${price}), might be parsing error for: ${priceText}`);
-      }
-      
-      logger.debug(`Successfully extracted price: ${price} from text: ${priceText}`);
-      return price;
-    } catch (error) {
-      logger.error(`Error extracting price value from "${priceText}": ${error}`);
-      return undefined;
+    // Remove currency symbols, commas, and whitespace
+    let cleanedText = priceText
+      .replace(/[^\d.,]/g, '')  // Remove all non-digit, non-decimal point, non-comma characters
+      .replace(/,/g, '.')       // Replace commas with decimals for European format
+      .replace(/\.(?=.*\.)/g, ''); // Keep only last decimal point
+    
+    // Check if we have a range like "10.99-15.99" and take the lower price
+    if (cleanedText.includes('-')) {
+      const parts = cleanedText.split('-');
+      cleanedText = parts[0]; // Take the first/lower price
     }
+    
+    // Parse the price value
+    const price = parseFloat(cleanedText);
+    
+    // Sanity check: if price seems unreasonably high (e.g., confusing cents with dollars)
+    // Most products shouldn't cost more than 10,000
+    if (!isNaN(price) && price > 10000) {
+      // Check if it might be a currency format issue (e.g., 1,234.56 interpreted as 123456)
+      return price / 100;
+    }
+    
+    return isNaN(price) ? undefined : price;
   }
 
   /**
@@ -2728,21 +2828,6 @@ class CrawlerService {
    */
   private parseIngredients(ingredientsText: string): string[] {
     if (!ingredientsText) return [];
-    
-    // Pre-clean: Remove obvious CSS and HTML fragments
-    ingredientsText = ingredientsText
-      // Remove CSS style blocks
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      // Remove script blocks
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      // Remove HTML comments
-      .replace(/<!--[\s\S]*?-->/g, '')
-      // Remove CSS rules
-      .replace(/\.[a-zA-Z0-9_-]+\s*{[^}]*}/g, '')
-      .replace(/#[a-zA-Z0-9_-]+\s*{[^}]*}/g, '')
-      // Remove specific Amazon classes
-      .replace(/\.po-[a-zA-Z0-9_-]+/g, '')
-      .replace(/\.a-[a-zA-Z0-9_-]+/g, '');
     
     // Try to extract the ingredients section if it's embedded in a larger text
     const ingredientsSection = ingredientsText.match(/ingredients\s*(?::|list)?(?:\s*:)?\s*(.*?)(?:directions|safety warning|product description|see more|\n\n|$)/is);
@@ -2756,15 +2841,9 @@ class CrawlerService {
       textToProcess.includes("SPF 50+") ||
       textToProcess.includes("FORMULA —") ||
       textToProcess.includes("NIVEA SUN") ||
-      textToProcess.includes("See more product details") ||
-      textToProcess.includes("Amazon.co.uk") ||
-      textToProcess.includes("word-break:") ||
-      textToProcess.includes("padding:") ||
-      textToProcess.includes("margin:") ||
-      textToProcess.includes("background:") ||
-      textToProcess.includes("display:")
+      textToProcess.includes("See more product details")
     ) {
-      // This isn't a real ingredients list, it's product marketing text or CSS
+      // This isn't a real ingredients list, it's product marketing text
       return [];
     }
     
@@ -2778,22 +2857,7 @@ class CrawlerService {
       const fullText = cosmeticMatch[0];
       return fullText.split(/,\s*/)
         .map(i => i.trim())
-        .filter(i => {
-          // Only keep valid ingredient names
-          return i.length > 1 && 
-                 !/^(and|or|with|contains)$/i.test(i) &&
-                 // Filter out CSS/HTML fragments
-                 !i.startsWith('.') &&
-                 !i.startsWith('#') &&
-                 !i.includes('{') &&
-                 !i.includes(':') &&
-                 !i.includes('=') &&
-                 !i.includes('padding') &&
-                 !i.includes('margin') &&
-                 !i.includes('word-break') &&
-                 !i.match(/^\d+px$/) &&
-                 !i.match(/^\d+em$/);
-        });
+        .filter(i => i.length > 1 && !/^(and|or|with|contains)$/i.test(i));
     }
     
     // Remove common phrases that aren't ingredients
@@ -2815,63 +2879,17 @@ class CrawlerService {
           .replace(/\.\s*$/, ''); // Remove trailing periods
       })
       .filter(item => {
-        // Apply extensive filtering to remove non-ingredient items
-        
-        // Skip empty items and common non-ingredient phrases
-        if (!item || 
-            item.length <= 1 || 
-            /^(ingredients|contains|warning|caution|notice)$/i.test(item)) {
-          return false;
-        }
-        
-        // Skip if it's marketing text or navigation text
-        if (/see more|› see more|immediate protection|spf 50\+|lasting hydration|innovative formula|formula —|ocean respect|nivea sun/i.test(item)) {
-          return false;
-        }
-        
-        // Skip if it looks like CSS or HTML
-        if (item.startsWith('.') || 
-            item.startsWith('#') || 
-            item.includes('{') || 
-            item.includes('}') ||
-            item.includes('<') ||
-            item.includes('>')) {
-          return false;
-        }
-        
-        // Skip CSS properties and values
-        if (item.includes(':') || 
-            item.includes('padding') || 
-            item.includes('margin') ||
-            item.includes('word-break') ||
-            item.includes('background') ||
-            item.includes('font-') ||
-            item.includes('color:') ||
-            item.includes('width:') ||
-            item.includes('height:') ||
-            item.includes('display:') ||
-            item.includes('position:') ||
-            item.match(/^\d+px$/) ||
-            item.match(/^\d+em$/) ||
-            item.match(/^\d+%$/) ||
-            item.match(/^auto$/)) {
-          return false;
-        }
-        
-        // Skip Amazon related fragments
-        if (item.includes('amazon') ||
-            item.includes('po-break-word') ||
-            item.includes('po-truncate') ||
-            item.includes('po-tta-action')) {
-          return false;
-        }
-        
-        return true;
+        // Remove empty items and common non-ingredient phrases
+        return item && 
+          !/^(ingredients|contains|warning|caution|notice)$/i.test(item) &&
+          item.length > 1 &&
+          // Filter out if it seems to be marketing text or navigation text
+          !/see more|› see more|immediate protection|spf 50\+|lasting hydration|innovative formula|formula —|ocean respect|nivea sun/i.test(item);
       });
     
     // If we have a substantial list (more than 3 entries), it's likely real ingredients
     if (rawIngredients.length > 3) {
-      // Remove duplicates while preserving order
+    // Remove duplicates while preserving order
       return Array.from(new Set(rawIngredients));
     }
     
@@ -3040,155 +3058,301 @@ class CrawlerService {
   }
 
   /**
-   * Extract structured data from the page (JSON-LD, microdata, meta tags)
+   * Extract structured data from the page (JSON-LD, microdata)
    */
-  private async extractStructuredData(page: Page): Promise<any> {
+  private async extractStructuredData(page: Page): Promise<Partial<ProductData>> {
     try {
-      return await page.evaluate(() => {
-        const result: any = {
-          jsonLd: null,
-          microdata: null,
-          meta: {}
+      const data = await page.evaluate(() => {
+        const structuredData: Partial<Record<string, any>> = {};
+        
+        // Helper function to find product data in nested objects
+        const findProductData = (data: any): any => {
+          if (!data) return null;
+          
+          // If it's an array, search each item
+          if (Array.isArray(data)) {
+            for (const item of data) {
+              const result = findProductData(item);
+              if (result) return result;
+            }
+            return null;
+          }
+          
+          // If it's already a product object, return it
+          if (data['@type'] === 'Product') return data;
+          
+          // If it has a @graph property (common in JSON-LD), search it
+          if (data['@graph'] && Array.isArray(data['@graph'])) {
+            for (const item of data['@graph']) {
+              if (item['@type'] === 'Product') return item;
+            }
+          }
+          
+          // Return null if no product found
+          return null;
         };
         
-        // Extract JSON-LD data
+        // Method 1: Extract from JSON-LD
+        try {
           const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-        if (jsonLdScripts.length > 0) {
-          const jsonLdData: any[] = [];
-          
-          jsonLdScripts.forEach(script => {
+          for (const script of jsonLdScripts) {
             try {
-              const content = JSON.parse(script.textContent || '{}');
-              jsonLdData.push(content);
-            } catch (e) {
-              // Ignore JSON parse errors
-            }
-          });
-          
-          // Find products in JSON-LD data
-          const products = jsonLdData.filter(item => {
-            return (
-              (item['@type'] === 'Product') || 
-              (Array.isArray(item) && item.some(subItem => subItem['@type'] === 'Product')) ||
-              (item['@graph'] && Array.isArray(item['@graph']) && 
-               item['@graph'].some(subItem => subItem['@type'] === 'Product'))
-            );
-          });
-          
-          if (products.length > 0) {
-            result.jsonLd = products;
-                  } else {
-            result.jsonLd = jsonLdData;
-          }
-        }
-        
-        // Extract Microdata
-        const extractMicrodata = (element: Element, result: any = {}) => {
-          // Get item type
-          const itemType = element.getAttribute('itemtype');
-          if (itemType) {
-            result['@type'] = itemType.split('/').pop();
-          }
-          
-          // Get item properties
-          const itemProps = element.querySelectorAll('[itemprop]');
-          itemProps.forEach(propEl => {
-            const propName = propEl.getAttribute('itemprop');
-            if (!propName) return;
-            
-            let propValue;
-            if (propEl.hasAttribute('content')) {
-              propValue = propEl.getAttribute('content');
-            } else if (propEl.tagName === 'META') {
-              propValue = propEl.getAttribute('content');
-            } else if (propEl.tagName === 'IMG') {
-              propValue = propEl.getAttribute('src');
-            } else if (propEl.tagName === 'A') {
-              propValue = propEl.getAttribute('href');
-            } else if (propEl.tagName === 'TIME') {
-              propValue = propEl.getAttribute('datetime') || propEl.textContent;
-              } else {
-              propValue = propEl.textContent;
-            }
-            
-            if (propValue) {
-              // Clean and trim the value
-              if (typeof propValue === 'string') {
-                propValue = propValue.trim();
-              }
+              const jsonData = JSON.parse(script.textContent || '');
+              const productData = findProductData(jsonData);
               
-              result[propName] = propValue;
-            }
-          });
-          
-          return result;
-        };
-        
-        // Find product microdata
-        const productElements = document.querySelectorAll('[itemtype*="Product"]');
-        if (productElements.length > 0) {
-          const microdataProducts = Array.from(productElements).map(el => 
-            extractMicrodata(el)
-          );
-          
-          result.microdata = microdataProducts;
-        }
-        
-        // Extract meta tags
-        const metaTags = [
-          // Open Graph (Facebook)
-          { name: 'og:title', key: 'title' },
-          { name: 'og:description', key: 'description' },
-          { name: 'og:image', key: 'image' },
-          { name: 'og:url', key: 'url' },
-          { name: 'og:type', key: 'type' },
-          { name: 'og:site_name', key: 'siteName' },
-          { name: 'og:price:amount', key: 'price' },
-          { name: 'og:price:currency', key: 'currency' },
-          { name: 'product:price:amount', key: 'price' },
-          { name: 'product:price:currency', key: 'currency' },
-          { name: 'product:availability', key: 'availability' },
-          { name: 'product:brand', key: 'brand' },
-          
-          // Twitter Cards
-          { name: 'twitter:title', key: 'title' },
-          { name: 'twitter:description', key: 'description' },
-          { name: 'twitter:image', key: 'image' },
-          
-          // Standard meta tags
-          { name: 'description', key: 'description' },
-          { name: 'keywords', key: 'keywords' },
-          { name: 'author', key: 'author' },
-          
-          // E-commerce specific tags
-          { name: 'product:brand', key: 'brand' },
-          { name: 'product:availability', key: 'availability' },
-          { name: 'product:condition', key: 'condition' },
-          { name: 'product:price:amount', key: 'price' },
-          { name: 'product:price:currency', key: 'currency' },
-          { name: 'product:retailer_item_id', key: 'sku' },
-          
-          // Additional common meta tags
-          { name: 'title', key: 'title' },
-          { name: 'canonical', key: 'canonicalUrl', attribute: 'href' }
-        ];
-        
-        // Extract from meta tags and link elements
-        metaTags.forEach(({ name, key, attribute = 'content' }) => {
-          const metaElements = document.querySelectorAll(`meta[property="${name}"], meta[name="${name}"], link[rel="${name}"]`);
-          if (metaElements.length > 0) {
-            const value = metaElements[0].getAttribute(attribute);
-            if (value) {
-              result.meta[key] = value;
+              if (productData) {
+                // Extract basic product information
+                if (productData.name) structuredData.name = productData.name;
+                if (productData.description) structuredData.description = productData.description;
+                if (productData.brand?.name) structuredData.brand = productData.brand.name;
+                else if (productData.brand) structuredData.brand = productData.brand;
+                
+                // Extract price information
+                if (productData.offers) {
+                  const offers = Array.isArray(productData.offers) ? 
+                    productData.offers : [productData.offers];
+                  
+                  if (offers.length > 0) {
+                    const offer = offers[0];
+                    if (offer.price) structuredData.price = parseFloat(offer.price);
+                    if (offer.priceCurrency) structuredData.currency = offer.priceCurrency;
+                    if (offer.availability) structuredData.availability = offer.availability;
+                  }
+                }
+                
+                // Extract images
+                if (productData.image) {
+                  if (Array.isArray(productData.image)) {
+                    structuredData.images = productData.image;
+                  } else {
+                    structuredData.images = [productData.image];
+                  }
+                }
+                
+                // Extract product identifiers
+                if (productData.sku) structuredData.sku = productData.sku;
+                if (productData.gtin13) structuredData.gtin13 = productData.gtin13;
+                if (productData.gtin14) structuredData.gtin14 = productData.gtin14;
+                if (productData.gtin8) structuredData.gtin8 = productData.gtin8;
+                if (productData.gtin) structuredData.gtin = productData.gtin;
+                if (productData.mpn) structuredData.mpn = productData.mpn;
+                
+                // Extract additional product properties if available
+                if (productData.additionalProperty && Array.isArray(productData.additionalProperty)) {
+                  for (const prop of productData.additionalProperty) {
+                    if (prop.name && (prop.value || prop.value === 0)) {
+                      structuredData[prop.name.toLowerCase().replace(/\s+/g, '_')] = prop.value;
+                    }
+                  }
+                }
+                
+                // Extract weight and dimensions if available
+                if (productData.weight) structuredData.weight = productData.weight;
+                if (productData.height) structuredData.height = productData.height;
+                if (productData.width) structuredData.width = productData.width;
+                if (productData.depth) structuredData.depth = productData.depth;
+                
+                // If we've found comprehensive data, we can break the loop
+                if (structuredData.name && structuredData.price && structuredData.brand) {
+                  break;
+                }
+              }
+            } catch (e) {
+              // Continue to the next script if parsing fails
+              continue;
             }
           }
-        });
+        } catch (e) {
+          // Continue to other extraction methods
+        }
         
-        return result;
+        // Method 2: Extract from microdata (itemscope/itemprop)
+        try {
+          const productElement = document.querySelector('[itemscope][itemtype*="Product"]');
+          if (productElement) {
+            // Extract basic product info
+            const nameEl = productElement.querySelector('[itemprop="name"]');
+            if (nameEl) structuredData.name = nameEl.textContent?.trim() || nameEl.getAttribute('content') || '';
+            
+            const descEl = productElement.querySelector('[itemprop="description"]');
+            if (descEl) structuredData.description = descEl.textContent?.trim() || descEl.getAttribute('content') || '';
+            
+            const brandEl = productElement.querySelector('[itemprop="brand"]');
+            if (brandEl) {
+              const brandNameEl = brandEl.querySelector('[itemprop="name"]');
+              if (brandNameEl) {
+                structuredData.brand = brandNameEl.textContent?.trim() || brandNameEl.getAttribute('content') || '';
+              } else {
+                structuredData.brand = brandEl.textContent?.trim() || brandEl.getAttribute('content') || '';
+              }
+            }
+            
+            // Extract price information
+            const priceEl = productElement.querySelector('[itemprop="price"]');
+            if (priceEl) {
+              const priceValue = priceEl.getAttribute('content') || priceEl.textContent?.trim();
+              if (priceValue) structuredData.price = parseFloat(priceValue);
+              
+              const currencyEl = productElement.querySelector('[itemprop="priceCurrency"]');
+              if (currencyEl) {
+                structuredData.currency = currencyEl.getAttribute('content') || currencyEl.textContent?.trim() || '';
+              }
+            }
+            
+            // Extract images
+            const imageEls = productElement.querySelectorAll('[itemprop="image"]');
+            if (imageEls.length > 0) {
+              structuredData.images = Array.from(imageEls).map(img => 
+                img.getAttribute('src') || img.getAttribute('content') || '').filter(Boolean);
+            }
+            
+            // Extract product identifiers
+            const skuEl = productElement.querySelector('[itemprop="sku"]');
+            if (skuEl) structuredData.sku = skuEl.textContent?.trim() || skuEl.getAttribute('content') || '';
+            
+            const gtinEl = productElement.querySelector('[itemprop="gtin"], [itemprop="gtin8"], [itemprop="gtin13"], [itemprop="gtin14"]');
+            if (gtinEl) structuredData.gtin = gtinEl.textContent?.trim() || gtinEl.getAttribute('content') || '';
+            
+            const mpnEl = productElement.querySelector('[itemprop="mpn"]');
+            if (mpnEl) structuredData.mpn = mpnEl.textContent?.trim() || mpnEl.getAttribute('content') || '';
+            
+            // Extract additional properties
+            const propEls = productElement.querySelectorAll('[itemprop]:not([itemprop="name"]):not([itemprop="description"]):not([itemprop="brand"]):not([itemprop="price"]):not([itemprop="priceCurrency"]):not([itemprop="image"]):not([itemprop="sku"]):not([itemprop="gtin"]):not([itemprop="gtin8"]):not([itemprop="gtin13"]):not([itemprop="gtin14"]):not([itemprop="mpn"])');
+            for (const propEl of propEls) {
+              const propName = propEl.getAttribute('itemprop');
+              if (propName) {
+                structuredData[propName] = propEl.textContent?.trim() || propEl.getAttribute('content') || '';
+              }
+            }
+          }
+        } catch (e) {
+          // Continue to other extraction methods
+        }
+        
+        // Method 3: Extract from OpenGraph (og:) and product meta tags
+        try {
+          const metaTags = document.querySelectorAll('meta[property^="og:"], meta[property^="product:"], meta[name^="og:"], meta[name^="product:"]');
+          for (const tag of metaTags) {
+            const property = tag.getAttribute('property') || tag.getAttribute('name') || '';
+            const content = tag.getAttribute('content') || '';
+            
+            if (property && content) {
+              const propName = property.replace('og:', '').replace('product:', '');
+              
+              switch(propName) {
+                case 'title':
+                  if (!structuredData.name) structuredData.name = content;
+                  break;
+                case 'description':
+                  if (!structuredData.description) structuredData.description = content;
+                  break;
+                case 'price:amount':
+                  if (!structuredData.price) structuredData.price = parseFloat(content);
+                  break;
+                case 'price:currency':
+                  if (!structuredData.currency) structuredData.currency = content;
+                  break;
+                case 'brand':
+                  if (!structuredData.brand) structuredData.brand = content;
+                  break;
+                case 'image':
+                case 'image:secure_url':
+                  if (!structuredData.images) structuredData.images = [];
+                  if (!structuredData.images.includes(content)) {
+                    structuredData.images.push(content);
+                  }
+                  break;
+                case 'availability':
+                  if (!structuredData.availability) structuredData.availability = content;
+                  break;
+                default:
+                  // Store other properties that might be useful
+                  if (!structuredData[propName]) {
+                    structuredData[propName] = content;
+                  }
+              }
+            }
+          }
+        } catch (e) {
+          // Continue processing
+        }
+        
+        // Method 4: Look for Amazon specific product data
+        try {
+          if (window.location.hostname.includes('amazon')) {
+            // Try to extract from customer-facing data
+            const amazonProductTitle = document.querySelector('#productTitle');
+            if (amazonProductTitle && !structuredData.name) {
+              structuredData.name = amazonProductTitle.textContent?.trim() || '';
+            }
+            
+            // Try to extract brand from byline
+            const amazonBrand = document.querySelector('#bylineInfo');
+            if (amazonBrand && !structuredData.brand) {
+              const brandText = amazonBrand.textContent || '';
+              const brandMatch = brandText.match(/Visit the (.*?) Store|Brand: (.*?)(?: \||$)/);
+              if (brandMatch) {
+                structuredData.brand = (brandMatch[1] || brandMatch[2] || '').trim();
+              }
+            }
+            
+            // Try to extract price
+            const amazonPrice = document.querySelector('#priceblock_ourprice, .a-price .a-offscreen');
+            if (amazonPrice && !structuredData.price) {
+              const priceText = amazonPrice.textContent || '';
+              const priceMatch = priceText.match(/(\d+(?:\.\d+)?)/);
+              if (priceMatch) {
+                structuredData.price = parseFloat(priceMatch[1]);
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore Amazon-specific errors
+        }
+        
+        return structuredData;
       });
+      
+      // Convert the structured data to ProductData format
+      const productData: Partial<ProductData> = {};
+      
+      if (data.name) productData.productName = String(data.name);
+      if (data.brand) productData.brand = String(data.brand);
+      if (data.description) productData.description = String(data.description);
+      if (data.price !== undefined) productData.price = Number(data.price);
+      
+      if (data.images && Array.isArray(data.images)) {
+        productData.images = data.images.filter(img => typeof img === 'string' && img.trim() !== '');
+      }
+      
+      // Extract potential ingredients information
+      if (data.ingredients) {
+        if (Array.isArray(data.ingredients)) {
+          productData.ingredients = data.ingredients.map(i => String(i));
+        } else if (typeof data.ingredients === 'string') {
+          productData.ingredients = this.parseIngredients(String(data.ingredients));
+        }
+      }
+      
+      // Create metadata object for additional properties
+      const metadata: Record<string, any> = {};
+      
+      // Add all other properties to metadata
+      Object.entries(data).forEach(([key, value]) => {
+        if (!['name', 'brand', 'description', 'price', 'images', 'ingredients'].includes(key) && value !== undefined) {
+          metadata[key] = value;
+        }
+      });
+      
+      if (Object.keys(metadata).length > 0) {
+        productData.metadata = metadata;
+      }
+      
+      logger.info(`Extracted structured data: product name: ${productData.productName}, brand: ${productData.brand}`);
+      return productData;
     } catch (error) {
       logger.warn(`Error extracting structured data: ${error}`);
-      return { jsonLd: null, microdata: null, meta: {} };
+      return {};
     }
   }
 
@@ -3404,75 +3568,151 @@ class CrawlerService {
   private cleanDescription(description: string): string {
     if (!description) return '';
     
-    try {
-      let cleaned = description.trim();
-      
-      // Remove HTML tags while preserving line breaks
-      cleaned = cleaned.replace(/<br\s*\/?>|<\/p>|<\/div>|<\/li>/gi, '\n');
-      cleaned = cleaned.replace(/<li>/gi, '• '); // Convert list items to bullet points
-      cleaned = cleaned.replace(/<\/h[1-6]>/gi, '\n'); // Add breaks after headers
-      
-      // Remove all remaining HTML tags
-      cleaned = cleaned.replace(/<[^>]*>/g, '');
-      
-      // Decode HTML entities
-      cleaned = cleaned.replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-                       .replace(/&#039;/g, "'")
-                       .replace(/&nbsp;/g, ' ');
-      
-      // Remove excessive whitespace and normalize line breaks
-      cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/\n{3,}/g, '\n\n');
-      
-      // Remove redundant information
-      const redundantPatterns = [
-        /About this item\s*/, 
-        /Product Description\s*/i,
-        /Description:?\s*/i,
-        /Features:?\s*/i,
-        /Specifications:?\s*/i,
-        /Details:?\s*/i,
-        /About the product\s*/i,
-        /More information\s*/i,
-        /Customer Reviews/i,
-        /Product Details/i,
-        /Technical Details/i,
-        /From the manufacturer/i,
-        /From the brand/i,
-        /Important information/i,
-        /See more product details/i,
-        /Read more/i,
-        /Amazon\.com/i,
-        /Visit the [\w\s]+ Store/i,
-        /Report incorrect product information/i,
-        /Tiki|Shopee|Lazada|Sendo/, // Vietnamese e-commerce platforms
-        /Đặc tính sản phẩm/i,
-        /Mô tả sản phẩm/i,
-        /Thông tin chi tiết/i
-      ];
-      
-      redundantPatterns.forEach(pattern => {
-        cleaned = cleaned.replace(pattern, '');
-      });
-      
-      // Remove duplicate sentences
-      const sentences = cleaned.split(/[.!?]+/);
-      const uniqueSentences = Array.from(new Set(sentences));
-      cleaned = uniqueSentences.join('. ').replace(/\.\s*\./g, '.').replace(/\s\./g, '.');
-      
-      // Truncate if too long
-      const maxLength = 5000;
-      if (cleaned.length > maxLength) {
-        cleaned = cleaned.substring(0, maxLength) + '...';
+    // First attempt to extract just the main product description
+    const mainDescriptionMatch = description.match(/about this item(.*?)(?:product description|\› See more product details)/is);
+    if (mainDescriptionMatch && mainDescriptionMatch[1].length > 50) {
+      description = mainDescriptionMatch[1];
+    }
+    
+    // Extract product description section if it exists
+    const productDescriptionMatch = description.match(/product description\s*(.*?)(?:ingredients|directions|safety warning|from the manufacturer)/is);
+    if (productDescriptionMatch && productDescriptionMatch[1].length > 50) {
+      description = productDescriptionMatch[1];
+    }
+    
+    // Split the content into lines to process each separately
+    const lines = description.split('\n');
+    const cleanedLines: string[] = [];
+    
+    // Process each line
+    for (const line of lines) {
+      // Skip JavaScript and CSS code patterns
+      if (line.includes('function(') || 
+          line.includes('window.') || 
+          line.includes('$(') ||
+          line.includes('jQuery') ||
+          line.includes('if (') ||
+          line.includes('else {') ||
+          line.includes('var ') ||
+          line.includes('const ') ||
+          line.includes('let ') ||
+          line.includes('setTimeout') ||
+          line.includes('.css(') ||
+          line.includes('.attr(') ||
+          line.includes('.execute(') ||
+          line.includes('#product') ||
+          line.includes('P.when(') ||
+          line.trim().startsWith('{') || 
+          line.trim().startsWith('}') ||
+          line.trim().endsWith('{') || 
+          line.trim().endsWith('}') ||
+          line.includes('ue.count') ||
+          line.includes('metricParameters') ||
+          line.includes('margin:') ||
+          line.includes('padding:') ||
+          line.includes('width:') ||
+          line.includes('height:') ||
+          line.includes('color:') ||
+          line.includes('position:') ||
+          line.includes('display:') ||
+          line.includes('overflow:') ||
+          line.includes('background:') ||
+          line.includes('font-size:') ||
+          line.includes('border:')) {
+        continue;
       }
       
-      return cleaned.trim();
-    } catch (error) {
-      logger.error(`Error cleaning description: ${error}`);
-      return description.substring(0, 2000);
+      // Clean the line
+      let cleanedLine = line
+        // Remove HTML tags but preserve layout
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<p>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<li>/gi, '\n• ')
+        .replace(/<\/li>/gi, '')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<[^>]*>/g, '')
+        
+        // Remove any remaining single-line code
+        .replace(/function\s+\w+\s*\([^)]*\)\s*{[^}]*}/g, '')
+        .replace(/\.[a-zA-Z0-9_-]+\s*{[^}]*}/g, '')
+        .replace(/\s*\{[^{}]*\}/g, '')
+        
+        // Clean up whitespace
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      
+      // Skip CSS and HTML markers
+      if (cleanedLine.startsWith('.') || 
+          cleanedLine.startsWith('#') ||
+          cleanedLine.includes('/*') ||
+          cleanedLine.includes('*/') ||
+          cleanedLine.includes('//') ||
+          cleanedLine.includes('<!DOCTYPE') ||
+          cleanedLine.includes('<html') ||
+          cleanedLine.includes('<body')) {
+        continue;
+      }
+      
+      // Skip empty lines
+      if (cleanedLine.length === 0) continue;
+      
+      // Skip placeholder technical specs
+      if (cleanedLine.startsWith('•')) {
+        const lowerLine = cleanedLine.toLowerCase();
+        if (lowerLine.includes('brand: brand') ||
+            lowerLine.includes('operating_system: operating system') ||
+            lowerLine.includes('operating system: operating system') ||
+            lowerLine.includes('ram_memory_installed_size: ram memory') ||
+            lowerLine.includes('ram memory installed size: ram memory') ||
+            lowerLine.includes('cpu_model: cpu model') ||
+            lowerLine.includes('cpu model: cpu model') ||
+            lowerLine.includes('cpu_speed: cpu speed') ||
+            lowerLine.includes('cpu speed: cpu speed') ||
+            lowerLine.includes('memory_storage_capacity: memory storage') ||
+            lowerLine.includes('memory storage capacity: memory storage') ||
+            lowerLine.includes('screen_size: screen size') ||
+            lowerLine.includes('screen size: screen size') ||
+            lowerLine.includes('model_name: model name') ||
+            lowerLine.includes('model name: model name') ||
+            lowerLine.includes('wireless_carrier: wireless carrier') ||
+            lowerLine.includes('wireless carrier: wireless carrier') ||
+            lowerLine.includes('cellular_technology: cellular') ||
+            lowerLine.includes('cellular technology: cellular')) {
+          continue;
+        }
+      }
+      
+      cleanedLines.push(cleanedLine);
     }
+    
+    let cleanedDescription = cleanedLines.join('\n');
+    
+    // Extract key product benefits as bullet points if they exist
+    const keyFeaturesMatch = description.match(/key features:(.*?)(?:technical specifications|\n\n\n)/is);
+    if (keyFeaturesMatch && keyFeaturesMatch[1]) {
+      const keyFeatures = keyFeaturesMatch[1]
+        .split(/\n/)
+        .filter(line => line.trim().startsWith('•') || line.trim().startsWith('-'))
+        .join('\n');
+        
+      if (keyFeatures.length > 20) {
+        cleanedDescription = "KEY FEATURES:\n" + keyFeatures + "\n\n" + cleanedDescription;
+      }
+    }
+    
+    // Remove excess line breaks
+    cleanedDescription = cleanedDescription.replace(/\n{3,}/g, '\n\n');
+    
+    // Remove non-printable characters
+    cleanedDescription = cleanedDescription.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    
+    // Limit description length to a reasonable size
+    if (cleanedDescription.length > 2000) {
+      cleanedDescription = cleanedDescription.substring(0, 2000) + "...";
+    }
+    
+    return cleanedDescription.trim();
   }
 
   /**
@@ -3998,542 +4238,160 @@ class CrawlerService {
         productData.variants = [];
       }
       
-      // Extract option data with sub-methods for cleaner code and better error handling
-      const optionsData = await this.extractOptionsData(page);
-      
-      // Process extracted option data
-      this.processExtractedOptionsData(optionsData, productData);
-    } catch (error: unknown) {
-      logger.warn(`Error extracting product options: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+      // Extract option data
+      const optionsData = await page.evaluate(() => {
+        const result: {
+          options: Record<string, any[]>,
+          variants: any[],
+          basePrice?: number,
+          priceRange?: {min: number, max: number}
+        } = {
+          options: {},
+          variants: []
+        };
 
-  /**
-   * Extract raw options data from the page
-   */
-  private async extractOptionsData(page: Page): Promise<{
-    options: Record<string, any[]>,
-    variants: any[],
-    basePrice?: number,
-    priceRange?: {min: number, max: number}
-  }> {
-    return await page.evaluate(() => {
-      const result: {
-        options: Record<string, any[]>,
-        variants: any[],
-        basePrice?: number,
-        priceRange?: {min: number, max: number}
-      } = {
-        options: {},
-        variants: []
-      };
-
-      // Helper function to extract price values
-      function extractPrice(text: string): {price?: number, priceDelta?: number} {
-        if (!text) return {};
-        
-        // Clean the text and prepare for extraction
-        const cleanText = text.trim()
-          .replace(/\s+/g, ' ')
-          .replace(/[\u200B-\u200D\uFEFF]/g, ''); // Remove zero-width spaces
-        
-        // Pattern for absolute prices (e.g., "$100", "100€", "₫100,000")
-        const absolutePriceMatch = cleanText.match(/([$€£₫¥])\s*([0-9,. ]+)|\b([0-9,. ]+)\s*([$€£₫¥])/);
-        
-        // Pattern for price differences with +/- (e.g., "+$10", "-$5", "+10€")
-        const priceDeltaMatch = cleanText.match(/([+-])\s*([$€£₫¥])\s*([0-9,. ]+)|([+-])\s*([0-9,. ]+)\s*([$€£₫¥])/);
-        
-        if (priceDeltaMatch) {
-          // Extract the delta value
-          const sign = priceDeltaMatch[1] || priceDeltaMatch[4];
-          const value = priceDeltaMatch[3] || priceDeltaMatch[5];
+        // Helper function to extract price values
+        function extractPrice(text: string): {price?: number, priceDelta?: number} {
+          if (!text) return {};
           
-          if (value) {
-            // Convert to number and apply sign
-            const cleanValue = value.replace(/[,.]/g, '.');
-            const numValue = parseFloat(cleanValue);
-            
-            if (!isNaN(numValue)) {
-              return {
-                priceDelta: sign === '+' ? numValue : -numValue
-              };
-            }
-          }
-        } else if (absolutePriceMatch) {
-          // Extract the absolute price value
-          const value = absolutePriceMatch[2] || absolutePriceMatch[3];
+          // Clean the text and prepare for extraction
+          const cleanText = text.trim()
+            .replace(/\s+/g, ' ')
+            .replace(/[\u200B-\u200D\uFEFF]/g, ''); // Remove zero-width spaces
           
-          if (value) {
-            // Convert to number
-            const cleanValue = value.replace(/[,. ]/g, '');
-            const numValue = parseFloat(cleanValue);
-            
-            if (!isNaN(numValue)) {
-              return {
-                price: numValue
-              };
-            }
-          }
-        }
-        
-        return {};
-      }
-      
-      // Function to determine if a string appears to be an option name
-      function isOptionName(text: string): boolean {
-        const optionNamePatterns = [
-          /size|color|style|model|configuration|version|capacity|storage|memory|ram|processor|cpu|display|screen|material|finish|edition|format|type|bundle|package|variant/i
-        ];
-        
-        return optionNamePatterns.some(pattern => pattern.test(text));
-      }
-
-      // Filter out form fields that are not product options
-      function isFormElement(text: string): boolean {
-        // Detect form field patterns that shouldn't be treated as product options
-        const formPatterns = [
-          /website|url|shipping cost|store name|city|state|province|date of the price|mm\/dd\/yyyy/i,
-          /\d{2}\s*\/\s*\d{2}\s*\/\s*\d{4}/,  // Date patterns
-          /submit|feedback|please select/i,    // Form buttons/placeholders
-          /enter the|where you found/i,        // Instructions
-          /online|offline/i                    // Form section headers
-        ];
-        
-        return formPatterns.some(pattern => pattern.test(text));
-      }
-      
-      // Method 1: Extract Amazon style options with swatch elements
-      try {
-        extractAmazonOptions(result);
-      } catch (error) {
-        // Continue with other methods
-      }
-      
-      // Method 2: Extract standard e-commerce option structures
-      try {
-        extractStandardOptions(result, isOptionName, isFormElement, extractPrice);
-      } catch (error) {
-        // Continue with other methods
-      }
-      
-      // Method 3: Extract from price range text
-      try {
-        extractPriceRanges(result);
-      } catch (error) {
-        // Continue with other methods
-      }
-      
-      // Method 4: Extract base price and options from the product form
-      try {
-        extractProductFormOptions(result, extractPrice);
-      } catch (error) {
-        // Continue with other methods
-      }
-      
-      // Method 5: Extract options from product detail tables
-      try {
-        extractTableOptions(result, isOptionName, isFormElement);
-      } catch (error) {
-        // Continue with other methods
-      }
-      
-      // Method 6: Handle Vietnamese format price display (specific for this project)
-      try {
-        extractVietnameseFormatOptions(result, extractPrice);
-      } catch (error) {
-        // Continue with other methods
-      }
-      
-      return result;
-
-      // Helper functions - defined inside the evaluate function
-
-      function extractAmazonOptions(result: any) {
-        // Amazon uses a specific structure for size/color options
-        const amazonOptionLabels = document.querySelectorAll('#variation_color_name .a-form-label, #variation_size_name .a-form-label, #variation_style_name .a-form-label');
-        
-        for (const label of amazonOptionLabels) {
-          const optionName = label.textContent?.trim();
-          if (optionName) {
-            const optionContainer = label.closest('[id^="variation_"]');
-            if (optionContainer) {
-              const options: any[] = [];
-              
-              // Look for options in different formats: swatches, dropdown, buttons
-              const swatches = optionContainer.querySelectorAll('li[data-asin], .swatchAvailable, .swatchSelect, .swatch-button');
-              const dropdownOptions = optionContainer.querySelectorAll('select option[value]:not([value=""])');
-              const buttons = optionContainer.querySelectorAll('.a-button-toggle, [role=button], .a-button');
-              
-              // Process swatches
-              if (swatches.length > 0) {
-                for (const swatch of swatches) {
-                  const value = swatch.getAttribute('title') || swatch.textContent?.trim();
-                  if (value) {
-                    // Look for price near the swatch
-                    let priceInfo = {};
-                    const priceElement = swatch.querySelector('[class*="price"], [class*="cost"], [class*="amount"]');
-                    if (priceElement) {
-                      priceInfo = extractPrice(priceElement.textContent || '');
-                    }
-                    
-                    options.push({
-                      name: optionName,
-                      value: value.replace(/^Select\s+/i, ''),
-                      ...priceInfo,
-                      available: !swatch.classList.contains('swatchUnavailable')
-                    });
-                  }
-                }
-              }
-              // Process dropdown options
-              else if (dropdownOptions.length > 0) {
-                for (const option of dropdownOptions) {
-                  const value = option.textContent?.trim();
-                  if (value) {
-                    // Amazon often includes price in dropdown options
-                    const parts = value.split('-');
-                    const optionValue = parts[0].trim();
-                    let priceInfo = {};
-                    
-                    if (parts.length > 1) {
-                      priceInfo = extractPrice(parts[1]);
-                    }
-                    
-                    // Use type assertion for HTML elements
-                    const htmlOption = option as HTMLOptionElement;
-                    
-                    options.push({
-                      name: optionName,
-                      value: optionValue.replace(/^Select\s+/i, ''),
-                      ...priceInfo,
-                      available: !htmlOption.disabled
-                    });
-                  }
-                }
-              }
-              // Process buttons
-              else if (buttons.length > 0) {
-                for (const button of buttons) {
-                  const value = button.textContent?.trim();
-                  if (value) {
-                    // Check for price elements within or near the button
-                    let priceInfo = {};
-                    const priceElement = button.querySelector('[class*="price"], [class*="cost"], [class*="amount"]') ||
-                                        button.nextElementSibling?.querySelector('[class*="price"], [class*="cost"], [class*="amount"]');
-                    
-                    if (priceElement) {
-                      priceInfo = extractPrice(priceElement.textContent || '');
-                    }
-                    
-                    options.push({
-                      name: optionName,
-                      value: value.replace(/^Select\s+/i, ''),
-                      ...priceInfo,
-                      available: !button.classList.contains('unavailable') && !button.classList.contains('disabled')
-                    });
-                  }
-                }
-              }
-              
-              if (options.length > 0) {
-                result.options[optionName] = options;
-              }
-            }
-          }
-        }
-      }
-
-      function extractStandardOptions(result: any, isOptionName: Function, isFormElement: Function, extractPrice: Function) {
-        // Look for common option selectors
-        const optionContainers = document.querySelectorAll(
-          '.product-options, .product-variants, [class*="product-option"], [class*="variant-option"], [class*="product-variant"], .swatch-options, .variant-wrapper, form[data-product-form]');
-        
-        for (const container of optionContainers) {
-          // Look for option labels/titles
-          const labels = container.querySelectorAll('label, .option-label, [class*="option-title"], [class*="variant-title"], legend, [class*="label"]');
+          // Pattern for absolute prices (e.g., "$100", "100€", "₫100,000")
+          const absolutePriceMatch = cleanText.match(/([$€£₫¥])\s*([0-9,. ]+)|\b([0-9,. ]+)\s*([$€£₫¥])/);
           
-          for (const label of labels) {
-            const labelText = label.textContent?.trim();
-            
-            // Skip if this looks like a form field rather than a product option
-            if (!labelText || isFormElement(labelText)) {
-              continue;
-            }
-            
-            if (labelText && isOptionName(labelText)) {
-              // Clean the option name
-              const optionName = labelText.replace(/:$/, '');
-              const options: any[] = [];
-              
-              // Find the option values associated with this label
-              // First, try to find a select element
-              const select = label.nextElementSibling?.querySelector('select') || 
-                             container.querySelector(`select[data-option="${optionName}"], select[aria-label="${optionName}"], select[name="${optionName}"]`);
-              
-              if (select) {
-                // Process dropdown options
-                const selectOptions = select.querySelectorAll('option[value]:not([value=""])');
-                for (const option of selectOptions) {
-                  const value = option.textContent?.trim();
-                  if (value) {
-                    // Check if price is included in the option text
-                    const parts = value.split(/[(-]/).map(p => p.trim());
-                    const optionValue = parts[0];
-                    let priceInfo = {};
-                    
-                    if (parts.length > 1 && parts[1].match(/[₫$€£¥]/)) {
-                      priceInfo = extractPrice(parts[1]);
-                    }
-                    
-                    // Use type assertion for HTML elements
-                    const htmlOption = option as HTMLOptionElement;
-                    
-                    options.push({
-                      name: optionName,
-                      value: optionValue,
-                      ...priceInfo,
-                      available: !htmlOption.disabled
-                    });
-                  }
-                }
-              } else {
-                // Look for radio buttons, checkboxes, or swatch elements
-                const optionGroup = label.closest('fieldset, .form-group, .option-wrapper, .swatch-wrapper') || container;
-                const optionElements = optionGroup.querySelectorAll('input[type="radio"], input[type="checkbox"], [class*="swatch"], [class*="option-value"], [role="option"], [class*="variant-option"]');
-                
-                for (const el of optionElements) {
-                  let value;
-                  
-                  // For inputs, get value from the label or value attribute
-                  if (el.tagName === 'INPUT') {
-                    const inputEl = el as HTMLInputElement;
-                    const inputId = inputEl.id;
-                    const associatedLabel = document.querySelector(`label[for="${inputId}"]`);
-                    value = associatedLabel?.textContent?.trim() || inputEl.value;
-                  } else {
-                    // For other elements, get the text content
-                    value = el.textContent?.trim() || el.getAttribute('data-value') || el.getAttribute('title');
-                  }
-                  
-                  // Skip if this value looks like a form field
-                  if (value && isFormElement(value)) {
-                    continue;
-                  }
-                  
-                  if (value) {
-                    // Look for price information
-                    let priceInfo = {};
-                    
-                    // Check for price in the element or nearby
-                    const priceElement = el.querySelector('[class*="price"], [class*="cost"], [data-price]') || 
-                                         el.nextElementSibling?.querySelector('[class*="price"], [class*="cost"], [data-price]');
-                    
-                    if (priceElement) {
-                      priceInfo = extractPrice(priceElement.textContent || '');
-                    } else if (el.getAttribute('data-price')) {
-                      // Try to get price from data attribute
-                      const dataPrice = el.getAttribute('data-price');
-                      if (dataPrice) {
-                        priceInfo = { price: parseFloat(dataPrice) };
-                      }
-                    } else if (el.getAttribute('data-price-adjustment')) {
-                      // Try to get price adjustment
-                      const priceAdjustment = el.getAttribute('data-price-adjustment');
-                      if (priceAdjustment) {
-                        priceInfo = { priceDelta: parseFloat(priceAdjustment) };
-                      }
-                    }
-                    
-                    options.push({
-                      name: optionName,
-                      value: value,
-                      ...priceInfo,
-                      available: !el.classList.contains('unavailable') && 
-                                !el.classList.contains('disabled') && 
-                                !el.hasAttribute('disabled')
-                    });
-                  }
-                }
-              }
-              
-              if (options.length > 0) {
-                result.options[optionName] = options;
-              }
-            }
-          }
-        }
-      }
-
-      function extractPriceRanges(result: any) {
-        const priceRangeElements = document.querySelectorAll(
-          '.price-range, [class*="price-range"], [class*="price-min-max"]');
-        
-        for (const el of priceRangeElements) {
-          const text = el.textContent || '';
-          // Look for patterns like "Price: $100 - $200" or "From $100 to $200"
-          const rangeMatch = text.match(/(\d[\d,.]+)\s*[-–~]\s*(\d[\d,.]+)/);
-          const fromToMatch = text.match(/from\s+[$€£₫¥]?\s*(\d[\d,.]+)\s+to\s+[$€£₫¥]?\s*(\d[\d,.]+)/i);
+          // Pattern for price differences with +/- (e.g., "+$10", "-$5", "+10€")
+          const priceDeltaMatch = cleanText.match(/([+-])\s*([$€£₫¥])\s*([0-9,. ]+)|([+-])\s*([0-9,. ]+)\s*([$€£₫¥])/);
           
-          if (rangeMatch || fromToMatch) {
-            const match = rangeMatch || fromToMatch;
-            if (match && match[1] && match[2]) {
-              const min = parseFloat(match[1].replace(/[,.]/g, ''));
-              const max = parseFloat(match[2].replace(/[,.]/g, ''));
+          if (priceDeltaMatch) {
+            // Extract the delta value
+            const sign = priceDeltaMatch[1] || priceDeltaMatch[4];
+            const value = priceDeltaMatch[3] || priceDeltaMatch[5];
+            
+            if (value) {
+              // Convert to number and apply sign
+              const cleanValue = value.replace(/[,.]/g, '.');
+              const numValue = parseFloat(cleanValue);
               
-              if (!isNaN(min) && !isNaN(max)) {
-                result.priceRange = {
-                  min: min,
-                  max: max
+              if (!isNaN(numValue)) {
+                return {
+                  priceDelta: sign === '+' ? numValue : -numValue
+                };
+              }
+            }
+          } else if (absolutePriceMatch) {
+            // Extract the absolute price value
+            const value = absolutePriceMatch[2] || absolutePriceMatch[3];
+            
+            if (value) {
+              // Convert to number
+              const cleanValue = value.replace(/[,. ]/g, '');
+              const numValue = parseFloat(cleanValue);
+              
+              if (!isNaN(numValue)) {
+                return {
+                  price: numValue
                 };
               }
             }
           }
+          
+          return {};
         }
-      }
-
-      function extractProductFormOptions(result: any, extractPrice: Function) {
-        const productForm = document.querySelector('form[action*="/cart/add"], form[action*="/cart"], #product_form');
         
-        if (productForm) {
-          // Try to find the base price
-          const basePriceElement = productForm.querySelector('[data-base-price], .base-price, .product-price:not([data-variant-price])');
+        // Function to determine if a string appears to be an option name
+        function isOptionName(text: string): boolean {
+          const optionNamePatterns = [
+            /size|color|style|model|configuration|version|capacity|storage|memory|ram|processor|cpu|display|screen|material|finish|edition|format|type|bundle|package|variant/i
+          ];
           
-          if (basePriceElement) {
-            // Extract base price
-            const basePriceText = basePriceElement.textContent || basePriceElement.getAttribute('data-base-price') || '';
-            if (basePriceText) {
-              const priceMatch = basePriceText.match(/[\d,.]+/);
-              if (priceMatch) {
-                result.basePrice = parseFloat(priceMatch[0].replace(/[,.]/g, ''));
-              }
-            }
-          }
-          
-          // Check for variant JSON data (common in Shopify sites)
-          const variantScript = document.querySelector('script[data-variant-json], [data-product-json], [type="application/json"][data-product]');
-          
-          if (variantScript) {
-            try {
-              const jsonContent = variantScript.textContent;
-              if (jsonContent) {
-                const variantData = JSON.parse(jsonContent);
-                
-                // Extract variants from the JSON
-                if (variantData.variants && Array.isArray(variantData.variants)) {
-                  const basePrice = result.basePrice || 0;
-                  
-                  for (const variant of variantData.variants) {
-                    const variantInfo: any = {
-                      id: variant.id?.toString(),
-                      sku: variant.sku,
-                      price: variant.price ? parseFloat(variant.price) : undefined,
-                      available: variant.available !== false,
-                      options: []
-                    };
-                    
-                    // Extract options for this variant
-                    if (variant.options && Array.isArray(variant.options)) {
-                      const optionNames = variantData.options || [];
-                      
-                      for (let i = 0; i < variant.options.length; i++) {
-                        const optionName = optionNames[i] || `Option ${i+1}`;
-                        const optionValue = variant.options[i];
-                        
-                        if (optionValue) {
-                          variantInfo.options.push({
-                            name: optionName,
-                            value: optionValue,
-                            price: variant.price ? parseFloat(variant.price) : undefined,
-                            available: variant.available !== false
-                          });
-                        }
-                      }
-                    }
-                    
-                    result.variants.push(variantInfo);
-                  }
-                  
-                  // Now that we have all variants, extract price ranges and options
-                  if (result.variants.length > 0) {
-                    const prices = result.variants
-                      .map((v: any) => v.price)
-                      .filter((p: any) => p !== undefined);
-                    
-                    if (prices.length > 0) {
-                      result.priceRange = {
-                        min: Math.min(...prices),
-                        max: Math.max(...prices)
-                      };
-                    }
-                    
-                    // Extract unique options from all variants
-                    for (const variant of result.variants) {
-                      for (const option of variant.options) {
-                        if (!result.options[option.name]) {
-                          result.options[option.name] = [];
-                        }
-                        
-                        // Check if this option value already exists
-                        const existingOption = result.options[option.name].find((o: any) => o.value === option.value);
-                        if (!existingOption) {
-                          result.options[option.name].push({
-                            name: option.name,
-                            value: option.value,
-                            available: option.available
-                          });
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (jsonError) {
-              // JSON parsing failed, continue
-            }
-          }
+          return optionNamePatterns.some(pattern => pattern.test(text));
         }
-      }
-
-      function extractTableOptions(result: any, isOptionName: Function, isFormElement: Function) {
-        const tables = document.querySelectorAll('table:not([class*="nutrition"])');
         
-        for (const table of tables) {
-          const rows = table.querySelectorAll('tr');
+        // Try to detect and extract options based on different website patterns
+        
+        // Method 1: Amazon style options with swatch elements
+        try {
+          // Amazon uses a specific structure for size/color options
+          const amazonOptionLabels = document.querySelectorAll('#variation_color_name .a-form-label, #variation_size_name .a-form-label, #variation_style_name .a-form-label');
           
-          for (const row of rows) {
-            const cells = row.querySelectorAll('td, th');
-            
-            if (cells.length >= 2) {
-              const firstCell = cells[0].textContent?.trim();
-              
-              // Skip form fields that look like data tables
-              if (firstCell && isFormElement(firstCell)) {
-                continue;
-              }
-              
-              if (firstCell && isOptionName(firstCell)) {
-                const optionName = firstCell.replace(/:$/, '');
+          for (const label of amazonOptionLabels) {
+            const optionName = label.textContent?.trim();
+            if (optionName) {
+              const optionContainer = label.closest('[id^="variation_"]');
+              if (optionContainer) {
                 const options: any[] = [];
                 
-                // Try to extract option values from the second cell
-                const secondCell = cells[1].textContent?.trim();
+                // Look for options in different formats: swatches, dropdown, buttons
+                const swatches = optionContainer.querySelectorAll('li[data-asin], .swatchAvailable, .swatchSelect, .swatch-button');
+                const dropdownOptions = optionContainer.querySelectorAll('select option[value]:not([value=""])');
+                const buttons = optionContainer.querySelectorAll('.a-button-toggle, [role=button], .a-button');
                 
-                // Skip if second cell also looks like a form field
-                if (secondCell && isFormElement(secondCell)) {
-                  continue;
-                }
-                
-                if (secondCell) {
-                  // Split by commas or other separators
-                  const values = secondCell.split(/[,|\/]/).map(v => v.trim());
-                  
-                  for (const value of values) {
-                    // Skip form-like texts
-                    if (value && !isFormElement(value)) {
+                // Process swatches
+                if (swatches.length > 0) {
+                  for (const swatch of swatches) {
+                    const value = swatch.getAttribute('title') || swatch.textContent?.trim();
+                    if (value) {
+                      // Look for price near the swatch
+                      let priceInfo = {};
+                      const priceElement = swatch.querySelector('[class*="price"], [class*="cost"], [class*="amount"]');
+                      if (priceElement) {
+                        priceInfo = extractPrice(priceElement.textContent || '');
+                      }
+                      
                       options.push({
                         name: optionName,
-                        value: value,
-                        available: true
+                        value: value.replace(/^Select\s+/i, ''),
+                        ...priceInfo,
+                        available: !swatch.classList.contains('swatchUnavailable')
+                      });
+                    }
+                  }
+                }
+                // Process dropdown options
+                else if (dropdownOptions.length > 0) {
+                  for (const option of dropdownOptions) {
+                    const value = option.textContent?.trim();
+                    if (value) {
+                      // Amazon often includes price in dropdown options
+                      const parts = value.split('-');
+                      const optionValue = parts[0].trim();
+                      let priceInfo = {};
+                      
+                      if (parts.length > 1) {
+                        priceInfo = extractPrice(parts[1]);
+                      }
+                      
+                      options.push({
+                        name: optionName,
+                        value: optionValue.replace(/^Select\s+/i, ''),
+                        ...priceInfo,
+                        available: !(option as HTMLOptionElement).disabled
+                      });
+                    }
+                  }
+                }
+                // Process buttons
+                else if (buttons.length > 0) {
+                  for (const button of buttons) {
+                    const value = button.textContent?.trim();
+                    if (value) {
+                      // Check for price elements within or near the button
+                      let priceInfo = {};
+                      const priceElement = button.querySelector('[class*="price"], [class*="cost"], [class*="amount"]') ||
+                                          button.nextElementSibling?.querySelector('[class*="price"], [class*="cost"], [class*="amount"]');
+                      
+                      if (priceElement) {
+                        priceInfo = extractPrice(priceElement.textContent || '');
+                      }
+                      
+                      options.push({
+                        name: optionName,
+                        value: value.replace(/^Select\s+/i, ''),
+                        ...priceInfo,
+                        available: !button.classList.contains('unavailable') && !button.classList.contains('disabled')
                       });
                     }
                   }
@@ -4544,907 +4402,381 @@ class CrawlerService {
                 }
               }
             }
+          } catch (error) {
+            // Continue with other methods
           }
-        }
-      }
-
-      function extractVietnameseFormatOptions(result: any, extractPrice: Function) {
-        // Look for price patterns in Vietnamese like "Size L: +20.000đ"
-        const optionElements = document.querySelectorAll('.option-item, .option-block, .variant-option, .product-option');
-        
-        for (const el of optionElements) {
-          const text = el.textContent || '';
-          // Match patterns like "Size L: +20.000đ" or "Cỡ XL +30.000₫"
-          const deltaMatch = text.match(/(size|cỡ|kích cỡ|màu|color|phiên bản|version)\s*([a-z0-9]+)(?:\s*:\s*|\s+)([+-]\s*[\d.,]+\s*[$€£₫¥])/i);
           
-          if (deltaMatch) {
-            const optionType = deltaMatch[1].trim();
-            const optionValue = deltaMatch[2].trim();
-            const priceText = deltaMatch[3].trim();
-            
-            const optionName = optionType.charAt(0).toUpperCase() + optionType.slice(1).toLowerCase();
-            const priceInfo = extractPrice(priceText);
-            
-            if (!result.options[optionName]) {
-              result.options[optionName] = [];
-            }
-            
-            // Check if this option value already exists
-            const existingOption = result.options[optionName].find((o: any) => o.value === optionValue);
-            if (!existingOption) {
-              result.options[optionName].push({
-                name: optionName,
-                value: optionValue,
-                ...priceInfo,
-                available: true
-              });
-            }
-          }
-        }
-      }
-    });
-  }
-
-  /**
-   * Process the extracted options data and update the product data
-   */
-  private processExtractedOptionsData(
-    optionsData: {
-      options: Record<string, any[]>,
-      variants: any[],
-      basePrice?: number,
-      priceRange?: {min: number, max: number}
-    } | null, 
-    productData: ProductData
-  ): void {
-    if (!optionsData) return;
-    
-    // Clean any form elements from options before adding to product data
-    if (optionsData.options && Object.keys(optionsData.options).length > 0) {
-      // Filter out any potentially form related options
-      const cleanedOptions: Record<string, any[]> = {};
-      const formRelatedPatterns = [
-        /price.*availability/i, /website/i, /url/i, /shipping/i, /cost/i, 
-        /date/i, /store/i, /city/i, /state/i, /province/i, /submit/i, 
-        /feedback/i, /mm\/dd/i, /\d{2}\/\d{2}/i, /online/i, /offline/i
-      ];
-      
-      for (const [optionName, optionValues] of Object.entries(optionsData.options)) {
-        // Skip option groups that match form patterns
-        if (formRelatedPatterns.some(pattern => pattern.test(optionName))) {
-          continue;
-        }
-        
-        // Filter out individual option values that match form patterns
-        const cleanedValues = optionValues.filter((option: any) => 
-          !formRelatedPatterns.some(pattern => 
-            pattern.test(option.name) || 
-            pattern.test(option.value) ||
-            pattern.test(String(option))
-          )
-        );
-        
-        if (cleanedValues.length > 0) {
-          cleanedOptions[optionName] = cleanedValues;
-        }
-      }
-      
-      // Use the cleaned options
-      productData.options = cleanedOptions;
-      logger.info(`Found ${Object.keys(cleanedOptions).length} option types after cleaning`);
-      
-      // Log each option type and count
-      for (const [optionName, optionValues] of Object.entries(cleanedOptions)) {
-        logger.info(`Option "${optionName}" has ${optionValues.length} values`);
-      }
-    } else {
-      productData.options = {};
-    }
-    
-    // Clean variants similarly
-    if (optionsData.variants && optionsData.variants.length > 0) {
-      const formRelatedPatterns = [
-        /price.*availability/i, /website/i, /url/i, /shipping/i, /cost/i, 
-        /date/i, /store/i, /city/i, /state/i, /province/i, /submit/i, 
-        /feedback/i, /mm\/dd/i, /\d{2}\/\d{2}/i, /online/i, /offline/i
-      ];
-      
-      const cleanedVariants = optionsData.variants.filter(variant => {
-        // Skip if any option in the variant matches form patterns
-        if (variant.options && Array.isArray(variant.options)) {
-          return !variant.options.some((option: any) => 
-            formRelatedPatterns.some(pattern => 
-              pattern.test(option.name) || pattern.test(option.value)
-            )
-          );
-        }
-        return true;
-      });
-      
-      productData.variants = cleanedVariants;
-      logger.info(`Found ${cleanedVariants.length} product variants after cleaning`);
-    } else {
-      productData.variants = [];
-    }
-    
-    // Add base price if available
-    if (optionsData.basePrice) {
-      productData.basePrice = optionsData.basePrice;
-      logger.info(`Found base price: ${optionsData.basePrice}`);
-    }
-    
-    // Add price range if available
-    if (optionsData.priceRange) {
-      productData.priceRange = optionsData.priceRange;
-      logger.info(`Found price range: ${optionsData.priceRange.min} - ${optionsData.priceRange.max}`);
-      
-      // If we don't have a price yet but we do have a price range, use the min price
-      if (productData.price === undefined && optionsData.priceRange.min) {
-        productData.price = optionsData.priceRange.min;
-        logger.info(`Setting product price to minimum price in range: ${productData.price}`);
-      }
-    }
-    
-    // Generate a more comprehensive metadata structure for options and variants
-    this.generateOptionsMetadata(productData);
-    
-    // Final cleanup: remove any form-related metadata
-    this.cleanFormRelatedMetadata(productData);
-  }
-
-  /**
-   * Clean form-related metadata from the product data
-   */
-  private cleanFormRelatedMetadata(productData: ProductData): void {
-    if (!productData.metadata) return;
-    
-    const formRelatedPatterns = [
-      /price.*availability/i, /website/i, /url/i, /shipping cost/i, 
-      /date of.*price/i, /store name/i, /city/i, /state/i, /province/i, 
-      /submit/i, /feedback/i, /mm\/dd/i, /\d{2}\/\d{2}\/\d{4}/i, 
-      /online/i, /offline/i, /please select/i, /enter the/i, /where you found/i
-    ];
-    
-    // Remove metadata keys that match form patterns
-    for (const key of Object.keys(productData.metadata)) {
-      if (formRelatedPatterns.some(pattern => pattern.test(key))) {
-        delete productData.metadata[key];
-      }
-      
-      // Also remove if the value is a form-like string
-      const value = productData.metadata[key];
-      if (typeof value === 'string' && formRelatedPatterns.some(pattern => pattern.test(value))) {
-        delete productData.metadata[key];
-      }
-    }
-  }
-
-  /**
-   * Generate metadata from options and variants
-   */
-  private generateOptionsMetadata(productData: ProductData): void {
-    if (!productData.metadata) {
-      productData.metadata = {};
-    }
-    
-    if (Object.keys(productData.options || {}).length > 0) {
-      // Add options data to metadata
-      productData.metadata.has_options = true;
-      productData.metadata.option_types = Object.keys(productData.options || {});
-      
-      // Add specific counts for reporting
-      if (productData.options?.["Size"]) productData.metadata.size_options_count = productData.options["Size"].length;
-      if (productData.options?.["Color"]) productData.metadata.color_options_count = productData.options["Color"].length;
-      if (productData.options?.["Configuration"]) productData.metadata.configuration_options_count = productData.options["Configuration"].length;
-      
-      // Record total option combinations
-      let totalCombinations = 1;
-      for (const options of Object.values(productData.options || {})) {
-        totalCombinations *= options.length;
-      }
-      
-      productData.metadata.total_option_combinations = totalCombinations;
-    }
-    
-    if (productData.variants && productData.variants.length > 0) {
-      productData.metadata.variants_count = productData.variants.length;
-    }
-    
-    if (productData.priceRange) {
-      productData.metadata.price_min = productData.priceRange.min;
-      productData.metadata.price_max = productData.priceRange.max;
-      productData.metadata.price_range = `${productData.priceRange.min} - ${productData.priceRange.max}`;
-    }
-  }
-
-  /**
-   * Extract product prices from the page with enhanced detection capabilities
-   */
-  private async extractProductPrices(page: Page): Promise<{
-    price?: number;
-    currency?: string;
-    priceRange?: { min: number; max: number };
-    discountedFrom?: number;
-    salePrices?: { [key: string]: number };
-  }> {
-    try {
-      logger.info('Extracting product prices from page');
-      
-      // Result structure
-      const result: {
-        price?: number;
-        currency?: string;
-        priceRange?: { min: number; max: number };
-        discountedFrom?: number;
-        salePrices?: { [key: string]: number };
-      } = {};
-      
-      // Step 1: First try to get price from structured data (JSON-LD, microdata) for accuracy
-      try {
-        const structuredData = await this.extractStructuredData(page);
-        let foundPrice = false;
-        
-        // Extract from JSON-LD if present
-        if (structuredData.jsonLd) {
-          const jsonLdData = Array.isArray(structuredData.jsonLd) ? 
-            structuredData.jsonLd : [structuredData.jsonLd];
-          
-          for (const data of jsonLdData) {
-            if (!data) continue;
-            
-            // Check if it's a product with offers
-            if (data['@type'] === 'Product' && data.offers) {
-              const offers = Array.isArray(data.offers) ? data.offers : [data.offers];
-              
-              // Find lowest price from all offers
-              for (const offer of offers) {
-                if (offer.price !== undefined) {
-                  const price = parseFloat(offer.price);
-                  if (!isNaN(price) && price > 0) {
-                    result.price = price;
-                    if (offer.priceCurrency) {
-                      result.currency = offer.priceCurrency;
-                    }
-                    foundPrice = true;
-                    logger.info(`Found price from JSON-LD: ${price} ${result.currency || ''}`);
-                    break;
-                  }
-                }
-              }
-            }
-            
-            // Check for AggregateOffer type (price ranges)
-            if (!foundPrice && data['@type'] === 'Product' && 
-                data.offers && data.offers['@type'] === 'AggregateOffer') {
-              const aggregateOffer = data.offers;
-              const lowPrice = parseFloat(aggregateOffer.lowPrice);
-              const highPrice = parseFloat(aggregateOffer.highPrice);
-              
-              if (!isNaN(lowPrice) && !isNaN(highPrice) && lowPrice > 0) {
-                result.priceRange = { min: lowPrice, max: highPrice };
-                result.price = lowPrice;
-                if (aggregateOffer.priceCurrency) {
-                  result.currency = aggregateOffer.priceCurrency;
-                }
-                foundPrice = true;
-                logger.info(`Found price range from JSON-LD: ${lowPrice}-${highPrice} ${result.currency || ''}`);
-              }
-            }
-            
-            if (foundPrice) break;
-          }
-        }
-      } catch (error) {
-        logger.warn(`Error extracting price from structured data: ${error}`);
-      }
-      
-      // Step 2: Try common price selectors if structured data didn't provide a price
-      if (!result.price) {
-        // Common price selectors for e-commerce sites
-        const priceSelectors = [
-          // General selectors with higher specificity first
-          '.product-price',
-          '.price-current',
-          '.price--main',
-          '.price-box',
-          '.current-price',
-          '.product__price',
-          '.product-single__price',
-          
-          // Amazon specific
-          '#apex_desktop .a-price .a-offscreen',
-          '#corePrice_desktop .a-price .a-offscreen',
-          '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',
-          '#priceblock_ourprice',
-          '.apexPriceToPay .a-offscreen',
-          '.a-price .a-offscreen',
-          '.priceToPay .a-offscreen',
-          
-          // Other major retailers
-          '.price-characteristic',
-          '.x-price-primary',
-          '[data-automation="product-price"]',
-          
-          // Generic selectors (with lower priority)
-          '[itemprop="price"]',
-          '[data-price]',
-          '[data-product-price]',
-          '.sale-price',
-          '.price',
-          '.now-price'
-        ];
-        
-        // Try each selector until we find a price
-        for (const selector of priceSelectors) {
+          // Method 2: Standard e-commerce option structures (WooCommerce, Shopify, etc.)
           try {
-            const element = await page.$(selector);
-            if (element) {
-              const priceText = await page.evaluate(el => el.textContent, element);
+            // Look for common option selectors
+            const optionContainers = document.querySelectorAll(
+              '.product-options, .product-variants, [class*="product-option"], [class*="variant-option"], [class*="product-variant"], .swatch-options, .variant-wrapper, form[data-product-form]');
+            
+            for (const container of optionContainers) {
+              // Look for option labels/titles
+              const labels = container.querySelectorAll('label, .option-label, [class*="option-title"], [class*="variant-title"], legend, [class*="label"]');
               
-              if (priceText) {
-                // Extract the price value
-                const extractedPrice = this.extractPriceValue(priceText);
-                if (extractedPrice !== undefined) {
-                  result.price = extractedPrice;
-                  // Try to identify currency
-                  const currencySymbolMatch = priceText.match(/[$€£¥₹₽₺₩₫₴]/);
-                  if (currencySymbolMatch) {
-                    const currencyMap: Record<string, string> = {
-                      '$': 'USD',
-                      '€': 'EUR',
-                      '£': 'GBP',
-                      '¥': 'JPY',
-                      '₹': 'INR',
-                      '₽': 'RUB',
-                      '₺': 'TRY',
-                      '₩': 'KRW',
-                      '₫': 'VND',
-                      '₴': 'UAH'
-                    };
-                    result.currency = currencyMap[currencySymbolMatch[0]] || 'USD';
+              for (const label of labels) {
+                const labelText = label.textContent?.trim();
+                if (labelText && isOptionName(labelText)) {
+                  // Clean the option name
+                  const optionName = labelText.replace(/:$/, '');
+                  const options: any[] = [];
+                  
+                  // Find the option values associated with this label
+                  // First, try to find a select element
+                  const select = label.nextElementSibling?.querySelector('select') || 
+                                 container.querySelector(`select[data-option="${optionName}"], select[aria-label="${optionName}"], select[name="${optionName}"]`);
+                  
+                  if (select) {
+                    // Process dropdown options
+                    const selectOptions = select.querySelectorAll('option[value]:not([value=""])');
+                    for (const option of selectOptions) {
+                      const value = option.textContent?.trim();
+                      if (value) {
+                        // Check if price is included in the option text
+                        const parts = value.split(/[(-]/).map(p => p.trim());
+                        const optionValue = parts[0];
+                        let priceInfo = {};
+                        
+                        if (parts.length > 1 && parts[1].match(/[₫$€£¥]/)) {
+                          priceInfo = extractPrice(parts[1]);
+                        }
+                        
+                        options.push({
+                          name: optionName,
+                          value: optionValue,
+                          ...priceInfo,
+                          available: !(option as HTMLOptionElement).disabled
+                        });
+                      }
+                    }
+                  } else {
+                    // Look for radio buttons, checkboxes, or swatch elements
+                    const optionGroup = label.closest('fieldset, .form-group, .option-wrapper, .swatch-wrapper') || container;
+                    const optionElements = optionGroup.querySelectorAll('input[type="radio"], input[type="checkbox"], [class*="swatch"], [class*="option-value"], [role="option"], [class*="variant-option"]');
+                    
+                    for (const el of optionElements) {
+                      let value;
+                      
+                      // For inputs, get value from the label or value attribute
+                      if (el.tagName === 'INPUT') {
+                        const inputEl = el as HTMLInputElement;
+                        const inputId = inputEl.id;
+                        const associatedLabel = document.querySelector(`label[for="${inputId}"]`);
+                        value = associatedLabel?.textContent?.trim() || inputEl.value;
+                      } else {
+                        // For other elements, get the text content
+                        value = el.textContent?.trim() || el.getAttribute('data-value') || el.getAttribute('title');
+                      }
+                      
+                      if (value) {
+                        // Look for price information
+                        let priceInfo = {};
+                        
+                        // Check for price in the element or nearby
+                        const priceElement = el.querySelector('[class*="price"], [class*="cost"], [data-price]') || 
+                                             el.nextElementSibling?.querySelector('[class*="price"], [class*="cost"], [data-price]');
+                        
+                        if (priceElement) {
+                          priceInfo = extractPrice(priceElement.textContent || '');
+                        } else if (el.getAttribute('data-price')) {
+                          // Try to get price from data attribute
+                          const dataPrice = el.getAttribute('data-price');
+                          if (dataPrice) {
+                            priceInfo = { price: parseFloat(dataPrice) };
+                          }
+                        } else if (el.getAttribute('data-price-adjustment')) {
+                          // Try to get price adjustment
+                          const priceAdjustment = el.getAttribute('data-price-adjustment');
+                          if (priceAdjustment) {
+                            priceInfo = { priceDelta: parseFloat(priceAdjustment) };
+                          }
+                        }
+                        
+                        options.push({
+                          name: optionName,
+                          value: value,
+                          ...priceInfo,
+                          available: !el.classList.contains('unavailable') && 
+                                    !el.classList.contains('disabled') && 
+                                    !el.hasAttribute('disabled')
+                        });
+                      }
+                    }
                   }
-                  logger.info(`Found price using selector ${selector}: ${result.price} ${result.currency || ''}`);
-                  break;
+                  
+                  if (options.length > 0) {
+                    result.options[optionName] = options;
+                  }
                 }
               }
             }
           } catch (error) {
-            // Continue to next selector
-            continue;
+            // Continue with other methods
           }
-        }
-      }
-      
-      // Step 3: Try to extract original/sale price if available
-      if (!result.discountedFrom) {
-        try {
-          const originalPriceSelectors = [
-            '.compare-at-price',
-            '.was-price',
-            '.old-price',
-            '.list-price',
-            '.original-price',
-            '.a-price.a-text-price .a-offscreen',
-            '.priceBlockStrikePriceString',
-            '.strike-through'
-          ];
           
-          for (const selector of originalPriceSelectors) {
-            const element = await page.$(selector);
-            if (element) {
-              const originalPriceText = await page.evaluate(el => el.textContent, element);
+          // Method 3: Extract from price range text
+          try {
+            const priceRangeElements = document.querySelectorAll(
+              '.price-range, [class*="price-range"], [class*="price-min-max"]');
+            
+            for (const el of priceRangeElements) {
+              const text = el.textContent || '';
+              // Look for patterns like "Price: $100 - $200" or "From $100 to $200"
+              const rangeMatch = text.match(/(\d[\d,.]+)\s*[-–~]\s*(\d[\d,.]+)/);
+              const fromToMatch = text.match(/from\s+[$€£₫¥]?\s*(\d[\d,.]+)\s+to\s+[$€£₫¥]?\s*(\d[\d,.]+)/i);
               
-              if (originalPriceText) {
-                const originalPrice = this.extractPriceValue(originalPriceText);
-                if (originalPrice !== undefined && (!result.price || originalPrice > result.price)) {
-                  result.discountedFrom = originalPrice;
-                  logger.info(`Found original price: ${result.discountedFrom}`);
-                  break;
-                }
-              }
-            }
-          }
-        } catch (error) {
-          logger.warn(`Error extracting original price: ${error}`);
-        }
-      }
-      
-      // If no currency but price found, infer currency from URL
-      if (result.price && !result.currency) {
-        const url = page.url().toLowerCase();
-        
-        if (url.includes('.co.uk') || url.includes('/uk/')) {
-          result.currency = 'GBP';
-        } else if (url.includes('.eu') || url.includes('.de') || url.includes('.fr')) {
-          result.currency = 'EUR';
-        } else if (url.includes('.jp') || url.includes('/jp/')) {
-          result.currency = 'JPY';
-        } else if (url.includes('.in') || url.includes('/in/')) {
-          result.currency = 'INR';
-        } else if (url.includes('.ca') || url.includes('/ca/')) {
-          result.currency = 'CAD';
-        } else if (url.includes('.au') || url.includes('/au/')) {
-          result.currency = 'AUD';
-        } else {
-          result.currency = 'USD'; // Default
-        }
-        
-        logger.info(`Inferred currency from URL: ${result.currency}`);
-      }
-      
-      return result;
-    } catch (error) {
-      logger.error(`Error in extractProductPrices: ${error}`);
-      return {};
-    }
-  }
-
-  /**
-   * Extract brand from a product's URL
-   */
-  private async extractBrandFromUrl(url: string): Promise<string | null> {
-    try {
-      const brandPatterns = [
-        // Brand in subdomain: brand.domain.com
-        /https?:\/\/([a-zA-Z0-9-]+)\.[^./]+\.[^/]+/,
-        
-        // Brand in path: domain.com/brand/
-        /https?:\/\/[^/]+\/([a-zA-Z0-9-]+)\/(?:[a-zA-Z0-9-]+)/,
-        
-        // Brand in product URL: domain.com/products/brand-product-name
-        /\/products\/([a-zA-Z0-9-]+)(?:-[a-zA-Z0-9-]+)/,
-        
-        // Brand as GET parameter
-        /[?&]brand=([a-zA-Z0-9-]+)/i
-      ];
-      
-      // Known brand names to validate against
-      const commonBrands = [
-        'apple', 'samsung', 'sony', 'lg', 'microsoft', 'dell', 'hp', 'lenovo', 
-        'asus', 'acer', 'nike', 'adidas', 'puma', 'coca-cola', 'pepsi', 'nestle',
-        'unilever', 'kelloggs', 'heinz', 'kraft', 'campbell', 'danone', 'loreal',
-        'nivea', 'neutrogena', 'dove', 'colgate', 'crest', 'oral-b', 'gillette',
-        'playstation', 'xbox', 'nintendo', 'dyson', 'philips', 'canon', 'nikon',
-        'gopro', 'bose', 'sonos', 'beats', 'kitchenaid', 'cuisinart', 'instant-pot'
-      ];
-      
-      // Try each pattern
-      for (const pattern of brandPatterns) {
-        const match = url.match(pattern);
-        if (match && match[1]) {
-          const potentialBrand = match[1].toLowerCase();
-          
-          // Skip common non-brand URL components
-          if (['www', 'shop', 'store', 'online', 'buy', 'product', 'products', 'item', 'category'].includes(potentialBrand)) {
-            continue;
-          }
-          
-          // If it's a known brand, format it properly
-          const knownBrandMatch = commonBrands.find(brand => 
-            potentialBrand === brand || 
-            potentialBrand.includes(brand) || 
-            brand.includes(potentialBrand)
-          );
-          
-          if (knownBrandMatch) {
-            // Capitalize the first letter of each word
-            return knownBrandMatch.split('-')
-              .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-              .join(' ');
-          }
-          
-          // If URL part is likely a brand (at least 3 chars and not common web words)
-          if (potentialBrand.length >= 3) {
-            // Replace hyphens and capitalize
-            return potentialBrand.split('-')
-              .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-              .join(' ');
-          }
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      logger.warn(`Error extracting brand from URL: ${error}`);
-      return null;
-    }
-  }
-
-  /**
-   * Extract brand from product name
-   */
-  private extractBrandFromProductName(productName: string): string | null {
-    try {
-      // Common brand pattern: Brand Product Name
-      // Extract first word or words if they look like a brand
-      const words = productName.split(' ');
-      
-      // Known brand names to check against
-      const commonBrands = [
-        'Apple', 'Samsung', 'Sony', 'LG', 'Microsoft', 'Dell', 'HP', 'Lenovo', 
-        'Asus', 'Acer', 'Nike', 'Adidas', 'Puma', 'Coca-Cola', 'Pepsi', 'Nestle',
-        'Unilever', 'Kelloggs', 'Heinz', 'Kraft', 'Campbell', 'Danone', 'Loreal',
-        'Nivea', 'Neutrogena', 'Dove', 'Colgate', 'Crest', 'Oral-B', 'Gillette',
-        'PlayStation', 'Xbox', 'Nintendo', 'Dyson', 'Philips', 'Canon', 'Nikon',
-        'GoPro', 'Bose', 'Sonos', 'Beats', 'KitchenAid', 'Cuisinart', 'Instant Pot'
-      ];
-      
-      // First check if any known brand is in the product name
-      for (const brand of commonBrands) {
-        if (productName.includes(brand)) {
-          return brand;
-        }
-        
-        // Also check case-insensitive
-        if (productName.toLowerCase().includes(brand.toLowerCase())) {
-          return brand;
-        }
-      }
-      
-      // If no known brand found, use heuristics to extract brand
-      if (words.length >= 2) {
-        const firstWord = words[0];
-        
-        // Check if first word is likely a brand (all caps or starts with capital)
-        if (firstWord === firstWord.toUpperCase() || 
-            (firstWord.charAt(0) === firstWord.charAt(0).toUpperCase() && 
-             firstWord.length >= 3)) {
-          return firstWord;
-        }
-        
-        // Try first two words if they look like a brand name
-        if (words.length >= 3) {
-          const possibleTwoWordBrand = words.slice(0, 2).join(' ');
-          if (/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(possibleTwoWordBrand)) {
-            return possibleTwoWordBrand;
-          }
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      logger.warn(`Error extracting brand from product name: ${error}`);
-      return null;
-    }
-  }
-
-  /**
-   * Extract enhanced images from the page
-   */
-  private async extractEnhancedImages(page: Page, productData: ProductData): Promise<void> {
-    try {
-      // Base URL for resolving relative image paths
-      const baseUrl = page.url();
-      
-      // Always initialize images array if it doesn't exist
-      if (!productData.images) {
-        productData.images = [];
-      }
-      
-      logger.info('Extracting enhanced product images');
-      
-      // Step 1: Extract from structured data first for best quality images
-      try {
-        const structuredData = await this.extractStructuredData(page);
-        if (structuredData && structuredData.jsonLd) {
-          const jsonLdData = Array.isArray(structuredData.jsonLd) ? 
-            structuredData.jsonLd : [structuredData.jsonLd];
-          
-          for (const data of jsonLdData) {
-            if (data && data['@type'] === 'Product') {
-              // Extract from image property
-              if (data.image) {
-                if (Array.isArray(data.image)) {
-                  data.image.forEach((img: any) => {
-                    if (img && typeof img === 'string') {
-                      productData.images?.push(this.resolveRelativeUrl(img, baseUrl));
-                    } else if (img && typeof img === 'object' && img.url) {
-                      productData.images?.push(this.resolveRelativeUrl(img.url, baseUrl));
-                    }
-                  });
-                } else if (typeof data.image === 'string') {
-                  productData.images?.push(this.resolveRelativeUrl(data.image, baseUrl));
-                } else if (data.image && (data.image as any).url) {
-                  productData.images?.push(this.resolveRelativeUrl((data.image as any).url, baseUrl));
-                }
-              }
-              
-              // Also check for offers with images
-              if (data.offers) {
-                const offers = Array.isArray(data.offers) ? data.offers : [data.offers];
-                for (const offer of offers) {
-                  if (offer.image) {
-                    if (Array.isArray(offer.image)) {
-                      offer.image.forEach((img: any) => {
-                        if (img) productData.images?.push(this.resolveRelativeUrl(img, baseUrl));
-                      });
-                    } else if (typeof offer.image === 'string') {
-                      productData.images?.push(this.resolveRelativeUrl(offer.image, baseUrl));
-                    }
+              if (rangeMatch || fromToMatch) {
+                const match = rangeMatch || fromToMatch;
+                if (match && match[1] && match[2]) {
+                  const min = parseFloat(match[1].replace(/[,.]/g, ''));
+                  const max = parseFloat(match[2].replace(/[,.]/g, ''));
+                  
+                  if (!isNaN(min) && !isNaN(max)) {
+                    result.priceRange = {
+                      min: min,
+                      max: max
+                    };
                   }
                 }
               }
             }
-          }
-        }
-        
-        // Extract from meta tags
-        const metaImages = await page.evaluate(() => {
-          const images: string[] = [];
-          // Open graph image
-          const ogImage = document.querySelector('meta[property="og:image"]');
-          if (ogImage && ogImage.getAttribute('content')) {
-            images.push(ogImage.getAttribute('content') || '');
+          } catch (error) {
+            // Continue with other methods
           }
           
-          // Twitter image
-          const twitterImage = document.querySelector('meta[name="twitter:image"]');
-          if (twitterImage && twitterImage.getAttribute('content')) {
-            images.push(twitterImage.getAttribute('content') || '');
-          }
-          
-          // Product image meta tags
-          const productImage = document.querySelector('meta[property="product:image"]');
-          if (productImage && productImage.getAttribute('content')) {
-            images.push(productImage.getAttribute('content') || '');
-          }
-          
-          return images.filter(Boolean);
-        });
-        
-        metaImages.forEach(img => {
-          productData.images?.push(this.resolveRelativeUrl(img, baseUrl));
-        });
-      } catch (structuredDataError) {
-        logger.warn(`Error extracting images from structured data: ${structuredDataError}`);
-      }
-      
-      // Step 2: Extract from common image gallery selectors
-      const imageSelectors = [
-        // Amazon selectors
-        '#imgTagWrapperId img', // Main product image
-        '#altImages img', // Alternative images
-        '.imgTagWrapper img', // Image wrapper
-        '.item-view-left-col-inner img', // Left column images
-        '.a-dynamic-image', // Amazon dynamic images
-        
-        // E-commerce platform specific
-        // Shopify
-        '.product-single__photo img',
-        '.product__photo img',
-        '.product-gallery__image',
-        
-        // WooCommerce
-        '.woocommerce-product-gallery__image img',
-        '.images img',
-        
-        // Magento
-        '.product.media img',
-        '.gallery-placeholder img',
-        
-        // BigCommerce
-        '.productView-image-wrapper img',
-        '.productView-thumbnail-link img',
-        
-        // eBay
-        '.vi-image-gallery img',
-        '#icImg',
-        
-        // Walmart
-        '.prod-hero-image-carousel img',
-        '.prod-alt-image-carousel img',
-        
-        // Generic selectors
-        '.product-image img',
-        '.product-images img',
-        '.product-photo img',
-        '.product-gallery img',
-        '.product-img img',
-        '.swiper-slide img',
-        '.slick-slide img',
-        '.carousel-item img',
-        '.owl-item img',
-        
-        // Vietnamese e-commerce platforms
-        // Tiki
-        '.product-image img',
-        '.thumbnail-img img',
-        '.styles__ImageWrapper-sc-jqk6y6-0 img',
-        '.styles__StyledImage-sc-n3mfir-0',
-        
-        // Shopee
-        '.product-image img',
-        '.product-img img',
-        '.carousel-slider img',
-        '.shopee-image img',
-        '.shopee-image__content img',
-        
-        // Lazada
-        '.pdp-mod-common-image img',
-        '.gallery-preview-panel__image',
-        '.item-gallery img',
-        
-        // Generic image selectors (fallbacks)
-        '[itemprop="image"]',
-        'img.product',
-        'img.product-image',
-        'img.main-image',
-        'img.primary-image',
-        'img.featured-image',
-        'img.zoom',
-        'img.zoomImg',
-        'img[data-zoom-image]',
-        'img[data-image]',
-        'img[data-src*="product"]',
-        'img[data-lazy*="product"]',
-        '.product-detail img',
-        '.product-info img',
-        '.main-image img'
-      ];
-      
-      const imageUrls = await this.extractImagesFromMultipleSelectors(page, imageSelectors, baseUrl);
-      productData.images = productData.images.concat(imageUrls);
-      
-      // Step 3: Alternative approach by extracting from specific containers/sections
-      try {
-        const containerImageUrls = await page.evaluate((baseUrl) => {
-          const imageContainerSelectors = [
-            // Product photo containers
-            '.product-photo', 
-            '.product-gallery',
-            '.product-image-container',
-            '.product-image-gallery',
-            '.image-gallery',
-            '.product-thumbnails',
-            '.thumbnail-list',
+          // Method 4: Extract base price and options from the product form
+          try {
+            const productForm = document.querySelector('form[action*="/cart/add"], form[action*="/cart"], #product_form');
             
-            // Carousels and sliders
-            '.carousel',
-            '.slider',
-            '.swiper-container',
-            '.slick-slider',
-            '.owl-carousel',
-            '.product-slider',
-            '.gallery-slider',
-            
-            // Vietnamese specific
-            '.style__ThumbnailWrapper',
-            '.gallery-preview-panel',
-            '.product-img',
-            '.pdp-block__carousel'
-          ];
-          
-          const images: string[] = [];
-          
-          for (const selector of imageContainerSelectors) {
-            const containers = document.querySelectorAll(selector);
-            containers.forEach(container => {
-              const imgElements = container.querySelectorAll('img');
-              imgElements.forEach(img => {
-                // Use various attributes where images might be stored
-                const dataSrc = img.getAttribute('data-src') || '';
-                const dataSrcset = img.getAttribute('data-srcset') || '';
-                const dataZoom = img.getAttribute('data-zoom-image') || img.getAttribute('data-zoom') || '';
-                const dataLazy = img.getAttribute('data-lazy') || img.getAttribute('data-lazy-src') || '';
-                const dataBigimg = img.getAttribute('data-bigimg') || '';
-                const srcset = img.getAttribute('srcset') || '';
-                const src = img.getAttribute('src') || '';
-                
-                // Collect all possible image URLs
-                [dataSrc, dataZoom, dataLazy, dataBigimg, src].forEach(imgSrc => {
-                  if (imgSrc && imgSrc.length > 0 && !imgSrc.includes('spacer.gif') && !imgSrc.includes('transparent.png')) {
-                    images.push(imgSrc);
+            if (productForm) {
+              // Try to find the base price
+              const basePriceElement = productForm.querySelector('[data-base-price], .base-price, .product-price:not([data-variant-price])');
+              
+              if (basePriceElement) {
+                // Extract base price
+                const basePriceText = basePriceElement.textContent || basePriceElement.getAttribute('data-base-price') || '';
+                if (basePriceText) {
+                  const priceMatch = basePriceText.match(/[\d,.]+/);
+                  if (priceMatch) {
+                    result.basePrice = parseFloat(priceMatch[0].replace(/[,.]/g, ''));
                   }
-                });
-                
-                // Handle srcset attribute
-                [dataSrcset, srcset].forEach(srcsetValue => {
-                  if (srcsetValue) {
-                    // Extract the first URL from srcset
-                    const srcsetUrls = srcsetValue.split(',');
-                    if (srcsetUrls.length > 0) {
-                      const firstUrl = srcsetUrls[0].trim().split(' ')[0];
-                      if (firstUrl && !firstUrl.includes('spacer.gif') && !firstUrl.includes('transparent.png')) {
-                        images.push(firstUrl);
+                }
+              }
+              
+              // Check for variant JSON data (common in Shopify sites)
+              const variantScript = document.querySelector('script[data-variant-json], [data-product-json], [type="application/json"][data-product]');
+              
+              if (variantScript) {
+                try {
+                  const jsonContent = variantScript.textContent;
+                  if (jsonContent) {
+                    const variantData = JSON.parse(jsonContent);
+                    
+                    // Extract variants from the JSON
+                    if (variantData.variants && Array.isArray(variantData.variants)) {
+                      const basePrice = result.basePrice || 0;
+                      
+                      for (const variant of variantData.variants) {
+                        const variantInfo: any = {
+                          id: variant.id?.toString(),
+                          sku: variant.sku,
+                          price: variant.price ? parseFloat(variant.price) : undefined,
+                          available: variant.available !== false,
+                          options: []
+                        };
+                        
+                        // Extract options for this variant
+                        if (variant.options && Array.isArray(variant.options)) {
+                          const optionNames = variantData.options || [];
+                          
+                          for (let i = 0; i < variant.options.length; i++) {
+                            const optionName = optionNames[i] || `Option ${i+1}`;
+                            const optionValue = variant.options[i];
+                            
+                            if (optionValue) {
+                              variantInfo.options.push({
+                                name: optionName,
+                                value: optionValue,
+                                price: variant.price ? parseFloat(variant.price) : undefined,
+                                available: variant.available !== false
+                              });
+                            }
+                          }
+                        }
+                        
+                        result.variants.push(variantInfo);
+                      }
+                      
+                      // Now that we have all variants, extract price ranges and options
+                      if (result.variants.length > 0) {
+                        const prices = result.variants
+                          .map(v => v.price)
+                          .filter(p => p !== undefined) as number[];
+                        
+                        if (prices.length > 0) {
+                          result.priceRange = {
+                            min: Math.min(...prices),
+                            max: Math.max(...prices)
+                          };
+                        }
+                        
+                        // Extract unique options from all variants
+                        for (const variant of result.variants) {
+                          for (const option of variant.options) {
+                            if (!result.options[option.name]) {
+                              result.options[option.name] = [];
+                            }
+                            
+                            // Check if this option value already exists
+                            const existingOption = result.options[option.name].find(o => o.value === option.value);
+                            if (!existingOption) {
+                              result.options[option.name].push({
+                                name: option.name,
+                                value: option.value,
+                                available: option.available
+                              });
+                            }
+                          }
+                        }
                       }
                     }
                   }
-                });
-              });
-            });
-          }
-          
-          return images;
-        }, baseUrl);
-        
-        // Resolve and add any new image URLs
-        containerImageUrls.forEach(url => {
-          const resolvedUrl = this.resolveRelativeUrl(url, baseUrl);
-          productData.images?.push(resolvedUrl);
-        });
-      } catch (containerError) {
-        logger.warn(`Error extracting images from containers: ${containerError}`);
-      }
-      
-      // Step 4: Extract background images (some sites use CSS backgrounds)
-      try {
-        const backgroundImages = await page.evaluate(() => {
-          const images: string[] = [];
-          
-          // Look for elements with background-image CSS property
-          const elementsWithBackground = document.querySelectorAll('.product-image, .gallery-image, .thumbnail, .product-gallery__image, [style*="background-image"]');
-          
-          elementsWithBackground.forEach(el => {
-            if (el instanceof HTMLElement) {
-              const style = window.getComputedStyle(el);
-              const backgroundImage = style.backgroundImage;
-              
-              if (backgroundImage && backgroundImage !== 'none') {
-                // Extract URL from the background-image property
-                const match = backgroundImage.match(/url\(['"]?([^'"()]*)['"]?\)/);
-                if (match && match[1]) {
-                  images.push(match[1]);
+                } catch (error) {
+                  // JSON parsing failed, continue
                 }
               }
             }
-          });
-          
-          return images;
-        });
-        
-        backgroundImages.forEach(url => {
-          const resolvedUrl = this.resolveRelativeUrl(url, baseUrl);
-          productData.images?.push(resolvedUrl);
-        });
-      } catch (backgroundError) {
-        logger.warn(`Error extracting background images: ${backgroundError}`);
-      }
-      
-      // Step 5: Clean and deduplicate images
-      if (productData.images && productData.images.length > 0) {
-        // Deduplicate images
-        productData.images = this.deduplicateImages(productData.images);
-        
-        // Filter out tiny images, icons, logos, and other non-product images
-        productData.images = productData.images.filter(url => {
-          // Skip common non-product images
-          if (url.includes('icon') || 
-              url.includes('logo') || 
-              url.includes('sprite') || 
-              url.includes('button') || 
-              url.includes('badge') ||
-              url.includes('transparent') ||
-              url.includes('placeholder') ||
-              url.includes('s.gif') ||
-              url.includes('1x1') ||
-              url.includes('blank')) {
-            return false;
+          } catch (error) {
+            // Continue with other methods
           }
           
-          // Make sure it's an image
-          if (!url.match(/\.(jpg|jpeg|png|webp|avif|gif)($|\?)/i)) {
-            // If no extension, check if it has query params indicating it's an image
-            if (!url.includes('image=') && !url.includes('img=') && !url.includes('/images/') && !url.includes('/image/')) {
-              return false;
+          // Method 5: Extract options from product detail tables
+          try {
+            const tables = document.querySelectorAll('table:not([class*="nutrition"])');
+            
+            for (const table of tables) {
+              const rows = table.querySelectorAll('tr');
+              
+              for (const row of rows) {
+                const cells = row.querySelectorAll('td, th');
+                
+                if (cells.length >= 2) {
+                  const firstCell = cells[0].textContent?.trim();
+                  
+                  if (firstCell && isOptionName(firstCell)) {
+                    const optionName = firstCell.replace(/:$/, '');
+                    const options: any[] = [];
+                    
+                    // Try to extract option values from the second cell
+                    const secondCell = cells[1].textContent?.trim();
+                    
+                    if (secondCell) {
+                      // Split by commas or other separators
+                      const values = secondCell.split(/[,|\/]/).map(v => v.trim());
+                      
+                      for (const value of values) {
+                        if (value) {
+                          options.push({
+                            name: optionName,
+                            value: value,
+                            available: true
+                          });
+                        }
+                      }
+                    }
+                    
+                    if (options.length > 0) {
+                      result.options[optionName] = options;
+                    }
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            // Continue with other methods
+          }
+          
+          return result;
+        });
+        
+        // Process extracted option data
+        if (optionsData) {
+          // Add options to product data
+          if (optionsData.options && Object.keys(optionsData.options).length > 0) {
+            productData.options = optionsData.options;
+            logger.info(`Found ${Object.keys(optionsData.options).length} option types`);
+            
+            // Log each option type and count
+            for (const [optionName, optionValues] of Object.entries(optionsData.options)) {
+              logger.info(`Option "${optionName}" has ${optionValues.length} values`);
             }
           }
           
-          return true;
-        });
-        
-        // Sort images by quality score
-        productData.images.sort((a, b) => {
-          const scoreA = this.getImageQualityScore(a);
-          const scoreB = this.getImageQualityScore(b);
-          return scoreB - scoreA;
-        });
-        
-        logger.info(`Extracted ${productData.images.length} unique product images`);
-      } else {
-        logger.warn('No product images found');
+          // Add variants to product data
+          if (optionsData.variants && optionsData.variants.length > 0) {
+            productData.variants = optionsData.variants;
+            logger.info(`Found ${optionsData.variants.length} product variants`);
+          }
+          
+          // Add base price if available
+          if (optionsData.basePrice) {
+            productData.basePrice = optionsData.basePrice;
+            logger.info(`Found base price: ${optionsData.basePrice}`);
+          }
+          
+          // Add price range if available
+          if (optionsData.priceRange) {
+            productData.priceRange = optionsData.priceRange;
+            logger.info(`Found price range: ${optionsData.priceRange.min} - ${optionsData.priceRange.max}`);
+            
+            // If we don't have a price yet but we do have a price range, use the min price
+            if (productData.price === undefined && optionsData.priceRange.min) {
+              productData.price = optionsData.priceRange.min;
+              logger.info(`Setting product price to minimum price in range: ${productData.price}`);
+            }
+          }
+          
+          // Generate a more comprehensive metadata structure for options and variants
+          if (!productData.metadata) {
+            productData.metadata = {};
+          }
+          
+          if (Object.keys(productData.options || {}).length > 0) {
+            // Add options data to metadata
+            productData.metadata.has_options = true;
+            productData.metadata.option_types = Object.keys(productData.options || {});
+            
+            // Add specific counts for reporting
+            if (productData.options?.["Size"]) productData.metadata.size_options_count = productData.options["Size"].length;
+            if (productData.options?.["Color"]) productData.metadata.color_options_count = productData.options["Color"].length;
+            if (productData.options?.["Configuration"]) productData.metadata.configuration_options_count = productData.options["Configuration"].length;
+            
+            // Record total option combinations
+            let totalCombinations = 1;
+            for (const options of Object.values(productData.options || {})) {
+              totalCombinations *= options.length;
+            }
+            
+            productData.metadata.total_option_combinations = totalCombinations;
+          }
+          
+          if (productData.variants && productData.variants.length > 0) {
+            productData.metadata.variants_count = productData.variants.length;
+          }
+          
+          if (productData.priceRange) {
+            productData.metadata.price_min = productData.priceRange.min;
+            productData.metadata.price_max = productData.priceRange.max;
+            productData.metadata.price_range = `${productData.priceRange.min} - ${productData.priceRange.max}`;
+          }
+        }
+      } catch (error) {
+        logger.warn(`Error extracting product options: ${error instanceof Error ? error.message : String(error)}`);
       }
-    } catch (extractError) {
-      logger.error(`Error extracting enhanced images: ${extractError}`);
+    } catch (error) {
+      logger.warn(`Error extracting product options: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

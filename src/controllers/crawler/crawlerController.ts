@@ -272,33 +272,33 @@ export const integrateProduct = async (req: Request, res: Response) => {
       // Core product data from crawling
       name: processedData.productName || 'Unknown Product',
       brand: processedData.brand,
-      price: processedData.price,
+      price: processedData.price ? Number(processedData.price) : undefined,
       description: processedData.description,
-      ingredients: processedData.ingredients,
-      nutritionFacts: processedData.nutritionFacts,
-      images: processedData.images,
+      ingredients: processedData.ingredients || [],
+      nutritionFacts: processedData.nutritionFacts || {},
+      images: processedData.images || [],
       primaryImage: processedData.images && processedData.images.length > 0 ? 
         processedData.images[0] : undefined,
       sourceUrl: processedData.url,
-      categories: aiAnalysis.categories,
-      keywords: aiAnalysis.keywords,
+      categories: aiAnalysis.categories || [],
+      keywords: aiAnalysis.keywords || [],
       sku: productSKU,
       barcode: processedData.barcode,
       
       // Additional catalog fields
       productCategoryId,
-      minimumOrderQuantity,
-      dailyCapacity,
+      minimumOrderQuantity: Number(minimumOrderQuantity),
+      dailyCapacity: Number(dailyCapacity),
       unitType,
-      currentAvailableStock,
-      pricePerUnit: processedData.price,
+      currentAvailableStock: Number(currentAvailableStock),
+      pricePerUnit: processedData.price ? Number(processedData.price) : undefined,
       productType: 'finishedGood',
       leadTime,
       leadTimeUnit,
       isSustainableProduct: false,
       
       // System fields
-      metadata: processedData.metadata,
+      metadata: processedData.metadata || {},
       isActive: true,
       createdBy: userId
     });

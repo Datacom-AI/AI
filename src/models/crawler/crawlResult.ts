@@ -1,5 +1,24 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+export interface ProductOption {
+  name: string;          // Option name (e.g., "Size", "Color", "Configuration")
+  value: string;         // Option value (e.g., "Large", "Blue", "512GB")
+  price?: number;        // Absolute price for this option
+  priceDelta?: number;   // Price difference from base price (e.g., +20.000đ)
+  available?: boolean;   // Whether this option is available
+  sku?: string;          // SKU for this specific option if available
+}
+
+export interface ProductVariant {
+  id?: string;           // Variant ID if available
+  sku?: string;          // Variant-specific SKU 
+  name?: string;         // Variant name
+  price?: number;        // Price for this specific variant
+  options: ProductOption[]; // Combination of options that make up this variant
+  available?: boolean;   // Whether this variant is available
+  imageUrl?: string;     // Variant-specific image URL
+}
+
 export interface ProductData {
   barcode: any;
   origin: any;
@@ -18,6 +37,15 @@ export interface ProductData {
   category?: string;
   size?: string;
   metadata?: Record<string, any>;
+  options?: {
+    [optionName: string]: ProductOption[];  // Organized by option type (e.g., "Size", "Color")
+  };
+  variants?: ProductVariant[];              // Complete variants with combined options
+  basePrice?: number;                       // Base price before options
+  priceRange?: {                            // Price range information
+    min: number;
+    max: number;
+  };
 }
 
 export interface AIAnalysis {

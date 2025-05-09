@@ -110,6 +110,35 @@ export const updateCrawledProduct = async (req: Request, res: Response) => {
       return res.status(400).json({ errors: errors.array() });
     }
     
+    // Process updateData to handle any special types or conversions
+    // Convert string numbers to actual numbers
+    if (updateData.price !== undefined) {
+      updateData.price = Number(updateData.price);
+    }
+    if (updateData.pricePerUnit !== undefined) {
+      updateData.pricePerUnit = Number(updateData.pricePerUnit);
+    }
+    if (updateData.currentAvailableStock !== undefined) {
+      updateData.currentAvailableStock = Number(updateData.currentAvailableStock);
+    }
+    if (updateData.minimumOrderQuantity !== undefined) {
+      updateData.minimumOrderQuantity = Number(updateData.minimumOrderQuantity);
+    }
+    if (updateData.dailyCapacity !== undefined) {
+      updateData.dailyCapacity = Number(updateData.dailyCapacity);
+    }
+    
+    // Handle null values and empty strings properly
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] === '' || updateData[key] === null) {
+        if (['price', 'pricePerUnit', 'currentAvailableStock', 'minimumOrderQuantity', 'dailyCapacity'].includes(key)) {
+          updateData[key] = undefined;
+        }
+      }
+    });
+    
+    logger.info(`Updating crawled product: ${id} with data:`, updateData);
+    
     const product = await CrawledProduct.findByIdAndUpdate(
       id, 
       updateData, 
@@ -125,9 +154,28 @@ export const updateCrawledProduct = async (req: Request, res: Response) => {
       message: 'Product updated successfully', 
       product 
     });
-  } catch (error) {
-    logger.error(`Error updating crawled product: ${error}`);
-    return res.status(500).json({ message: 'Internal server error' });
+  } catch (error: any) {
+    logger.error(`Error updating crawled product: ${error.message || error}`);
+    
+    // Send more detailed error information to help with debugging
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: error.errors 
+      });
+    }
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        message: 'Invalid data format', 
+        error: error.message 
+      });
+    }
+    
+    return res.status(500).json({ 
+      message: 'Internal server error',
+      error: error.message || 'Unknown error'
+    });
   }
 };
 
