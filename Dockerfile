@@ -21,7 +21,6 @@ RUN npm install --production  # Chỉ lấy dependencies cần chạy
 # Copy build kết quả từ stage 1
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/.env ./
-COPY --from=builder /app/logs ./logs
 
 EXPOSE 5000
 
