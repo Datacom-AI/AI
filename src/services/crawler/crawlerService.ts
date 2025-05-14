@@ -163,7 +163,7 @@ class CrawlerService {
       await this.setupStealthBrowser(page);
       
       // Wait a random delay before navigating (human-like behavior)
-      await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)));
+      await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
       
       // Configure request interception with minimal blocking
       await page.setRequestInterception(true);
@@ -322,7 +322,7 @@ class CrawlerService {
               });
               
               // Extra waiting for Amazon product pages
-              await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 2000)));
+              await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000);
             } catch (error) {
               logger.warn(`Error during Amazon homepage visit: ${error}`);
               // Continue with direct navigation since homepage visit failed
@@ -352,7 +352,7 @@ class CrawlerService {
               throw new Error('CAPTCHA detected, unable to bypass');
             }
             // Wait longer before retrying with a different approach
-            await new Promise(resolve => setTimeout(resolve, 10000 + Math.random() * 5000));
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 10000 + Math.random() * 5000);
             continue;
           }
           
@@ -362,7 +362,7 @@ class CrawlerService {
               throw new Error('Page content too small, might be blocked');
             }
             // Wait longer before retrying
-            await new Promise(resolve => setTimeout(resolve, 5000 + Math.random() * 5000));
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 5000 + Math.random() * 5000);
             continue;
           }
           
@@ -396,7 +396,7 @@ class CrawlerService {
           }
           
           // Wait before retrying with increasing backoff and randomization
-          await new Promise(resolve => setTimeout(resolve, (2000 * attempt) + (Math.random() * 3000)));
+          await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), (2000 * attempt) + (Math.random() * 3000));
         }
       }
       
@@ -736,23 +736,23 @@ class CrawlerService {
               const el = await page.$(sel);
               if (el) {
                 await el.click({ delay: 100 + Math.random() * 200 });
-                await page.waitForTimeout(1000 + Math.random() * 2000);
+                await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
               }
             } catch (e) {}
           }
           // Thử reload lại trang
           try {
             await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.waitForTimeout(2000 + Math.random() * 2000);
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 2000);
           } catch (e) {}
           // Thử đổi user-agent
           try {
             const randomUA = this.USER_AGENTS[Math.floor(Math.random() * this.USER_AGENTS.length)];
             await page.setUserAgent(randomUA);
-            await page.waitForTimeout(1000 + Math.random() * 2000);
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
           } catch (e) {}
           // Random delay trước khi retry
-          await page.waitForTimeout(2000 + Math.random() * 3000);
+          await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 3000);
           return true;
         }
       }
@@ -792,23 +792,23 @@ class CrawlerService {
               const el = await page.$(sel);
               if (el) {
                 await el.click({ delay: 100 + Math.random() * 200 });
-                await page.waitForTimeout(1000 + Math.random() * 2000);
+                await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
               }
             } catch (e) {}
           }
           // Thử reload lại trang
           try {
             await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.waitForTimeout(2000 + Math.random() * 2000);
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 2000);
           } catch (e) {}
           // Thử đổi user-agent
           try {
             const randomUA = this.USER_AGENTS[Math.floor(Math.random() * this.USER_AGENTS.length)];
             await page.setUserAgent(randomUA);
-            await page.waitForTimeout(1000 + Math.random() * 2000);
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
           } catch (e) {}
           // Random delay trước khi retry
-          await page.waitForTimeout(2000 + Math.random() * 3000);
+          await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 3000);
           return true;
         }
       }
@@ -852,12 +852,12 @@ class CrawlerService {
             
             if (isVisible) {
               // Add a small delay before clicking (more human-like)
-              await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000)));
+              await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 500 + Math.random() * 1000);
               await button.click();
               logger.info('Accepted cookie consent');
               
               // Wait a moment for the banner to disappear
-              await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 500)));
+              await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 500 + Math.random() * 500);
               return;
             }
           }
@@ -880,7 +880,7 @@ class CrawlerService {
       logger.info('Performing random user behavior to appear more human-like');
       
       // Wait a bit before performing actions
-      await page.waitForFunction(`setTimeout(() => {}, ${1000 + Math.random() * 2000})`);
+      await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
       
       const performScroll = (scrollCount: number) => {
         return page.evaluate((count) => {
@@ -947,14 +947,14 @@ class CrawlerService {
           try {
             // First try moving to the element
             await page.mouse.move(randomElement.x, randomElement.y);
-            await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000)));
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 500 + Math.random() * 1000);
             
             // Then try clicking
             await page.mouse.click(randomElement.x, randomElement.y, { button: 'left' });
             logger.info('Clicked on random element during user behavior simulation');
             
             // Wait a bit after clicking
-            await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)));
+            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
           } catch (e) {
             // Just log the click error and continue - don't interrupt the crawl
             const errorMessage = e instanceof Error ? e.message : String(e);
@@ -1068,7 +1068,7 @@ class CrawlerService {
       });
       
       // Short final wait to ensure everything is rendered
-      await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000)));
+      await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 1000);
     } catch (error) {
       logger.warn(`Error waiting for dynamic content: ${error}`);
       // Continue anyway
@@ -1825,6 +1825,9 @@ class CrawlerService {
       return productData;
     }
   }
+}
+
+
 
   /**
    * Extract technical specifications directly from Amazon's product table
