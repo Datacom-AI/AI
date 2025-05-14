@@ -1,23 +1,28 @@
-# Use official Node.js LTS image
-FROM node:20-alpine
+# ---------- STAGE 1: Build ----------
+FROM node:20-alpine AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package.json package-lock.json ./
+COPY package*.json ./
+RUN npm install  # Cài cả devDependencies (build được TypeScript)
 
-# Install dependencies
-RUN npm install --production
-
-# Copy the rest of the application code
 COPY . .
 
-# Build TypeScript code
 RUN npm run build
 
-# Expose the port (default 5000, can be overridden by env)
+# ---------- STAGE 2: Runtime ----------
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install --production  # Chỉ lấy dependencies cần chạy
+
+# Copy build kết quả từ stage 1
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/.env ./
+COPY --from=builder /app/logs ./logs
+
 EXPOSE 5000
 
-# Start the server
-CMD ["npm", "start"] 
+CMD ["node", "dist/index.js"]
