@@ -16,8 +16,6 @@ export interface CrawlTaskConfig {
 }
 
 export interface CrawlTaskDocument extends Document {
-  save(): unknown;
-  _id: any;
   url: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   config: CrawlTaskConfig;
