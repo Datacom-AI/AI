@@ -48,11 +48,50 @@ class CrawlerService {
   async initBrowser(): Promise<Browser> {
     if (!this.browser) {
       logger.info('Initializing Puppeteer browser');
-      
-      // Set up browser launch options with advanced stealth settings
-      const launchOptions: PuppeteerLaunchOptions = {
+      // Tự động phát hiện executablePath phù hợp
+      let executablePath: string | undefined = '/usr/bin/chromium-browser';
+      try {
+        if (process.platform === 'win32') {
+          // Windows: thử các đường dẫn phổ biến
+          const winPaths = [
+            'C:/Program Files/Google/Chrome/Application/chrome.exe',
+            'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+            'C:/Program Files/Chromium/Application/chromium.exe',
+            'C:/Program Files (x86)/Chromium/Application/chromium.exe'
+          ];
+          for (const p of winPaths) {
+            if (fs.existsSync(p)) {
+              executablePath = p;
+              break;
+            }
+          }
+        } else {
+          // Linux: thử các đường dẫn phổ biến
+          const linuxPaths = [
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable'
+          ];
+          let found = false;
+          for (const p of linuxPaths) {
+            if (fs.existsSync(p)) {
+              executablePath = p;
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            executablePath = undefined; // Để Puppeteer tự chọn
+          }
+        }
+      } catch (e) {
+        logger.warn('Error detecting browser executable: ' + e);
+        executablePath = undefined;
+      }
+      // Set up browser launch options
+      const launchOptions: any = {
         headless: true,
-        executablePath: '/usr/bin/chromium-browser', // hoặc '/usr/bin/chromium'
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -81,26 +120,39 @@ class CrawlerService {
         protocolTimeout: 300000, // 5 phút
         timeout: 300000,         // 5 phút
       };
-      
+      if (executablePath) {
+        launchOptions.executablePath = executablePath;
+      }
       // Add proxy if configured
       if (config.crawler.useProxy && config.crawler.proxyUrl) {
         logger.info('Using proxy for browser');
         launchOptions.args?.push(`--proxy-server=${config.crawler.proxyUrl}`);
       }
-      
-      this.browser = await puppeteer.launch(launchOptions);
-      
+      // Remove env if undefined or has undefined values
+      if (launchOptions.env) {
+        Object.keys(launchOptions.env).forEach(key => {
+          if (launchOptions.env && launchOptions.env[key] === undefined) {
+            delete launchOptions.env[key];
+          }
+        });
+      }
+      this.browser = (await puppeteer.launch(launchOptions)) as unknown as Browser;
       // If we have proxy authentication, set it up
       if (config.crawler.useProxy && 
           config.crawler.proxyUsername && 
           config.crawler.proxyPassword) {
-        const pages = await this.browser.pages();
-        const page = pages.length > 0 ? pages[0] : await this.browser.newPage();
-        await page.authenticate({
-          username: config.crawler.proxyUsername,
-          password: config.crawler.proxyPassword
-        });
+        if (this.browser) {
+          const pages = await this.browser.pages();
+          const page = pages.length > 0 ? pages[0] : await this.browser.newPage();
+          await page.authenticate({
+            username: config.crawler.proxyUsername,
+            password: config.crawler.proxyPassword
+          });
+        }
       }
+    }
+    if (!this.browser) {
+      throw new Error('Failed to initialize Puppeteer browser');
     }
     return this.browser;
   }
@@ -163,7 +215,7 @@ class CrawlerService {
       await this.setupStealthBrowser(page);
       
       // Wait a random delay before navigating (human-like behavior)
-      await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
+      await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)));
       
       // Configure request interception with minimal blocking
       await page.setRequestInterception(true);
@@ -225,7 +277,8 @@ class CrawlerService {
             // Khởi tạo lại browser không dùng proxy
             await this.closeBrowser();
             this.browser = null;
-            const directLaunchOptions: PuppeteerLaunchOptions = {
+            // Fix: Remove env if undefined or has undefined values, and cast to correct type
+            const directLaunchOptions: any = {
               headless: true,
               args: [
                 '--no-sandbox', 
@@ -254,7 +307,22 @@ class CrawlerService {
               protocolTimeout: 300000, // 5 phút
               timeout: 300000,         // 5 phút
             };
-            this.browser = await puppeteer.launch(directLaunchOptions);
+
+            // Remove env if undefined or has undefined values
+            if (directLaunchOptions.env) {
+              Object.keys(directLaunchOptions.env).forEach(key => {
+                if (directLaunchOptions.env && directLaunchOptions.env[key] === undefined) {
+                  delete directLaunchOptions.env[key];
+                }
+              });
+            }
+
+            this.browser = (await puppeteer.launch(directLaunchOptions)) as unknown as Browser;
+
+            if (!this.browser) {
+              throw new Error('Failed to initialize Puppeteer browser (direct connection)');
+            }
+
             page = await this.browser.newPage();
             await page.setViewport({ width: viewportWidth, height: viewportHeight });
             await page.setUserAgent(randomUserAgent);
@@ -322,7 +390,7 @@ class CrawlerService {
               });
               
               // Extra waiting for Amazon product pages
-              await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000);
+              await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 2000)));
             } catch (error) {
               logger.warn(`Error during Amazon homepage visit: ${error}`);
               // Continue with direct navigation since homepage visit failed
@@ -352,7 +420,7 @@ class CrawlerService {
               throw new Error('CAPTCHA detected, unable to bypass');
             }
             // Wait longer before retrying with a different approach
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 10000 + Math.random() * 5000);
+            await new Promise(resolve => setTimeout(resolve, 10000 + Math.random() * 5000));
             continue;
           }
           
@@ -362,7 +430,7 @@ class CrawlerService {
               throw new Error('Page content too small, might be blocked');
             }
             // Wait longer before retrying
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 5000 + Math.random() * 5000);
+            await new Promise(resolve => setTimeout(resolve, 5000 + Math.random() * 5000));
             continue;
           }
           
@@ -396,7 +464,7 @@ class CrawlerService {
           }
           
           // Wait before retrying with increasing backoff and randomization
-          await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), (2000 * attempt) + (Math.random() * 3000));
+          await new Promise(resolve => setTimeout(resolve, (2000 * attempt) + (Math.random() * 3000)));
         }
       }
       
@@ -702,123 +770,40 @@ class CrawlerService {
       const captchaKeywords = [
         'captcha', 'robot check', 'human verification', 'security check', 
         'prove you are human', 'automated access', 'suspicious activity',
-        'bot behavior', 'enter the characters', 'enter the letters',
-        'Type the characters you see', 'Enter the characters as they are shown in the image',
-        'Sorry, we just need to make sure you\'re not a robot.'
+        'bot behavior', 'enter the characters', 'enter the letters'
       ];
-      // Check for keywords
+      
       for (const keyword of captchaKeywords) {
-        if (content.toLowerCase().includes(keyword.toLowerCase())) {
-          // Chụp ảnh màn hình khi phát hiện CAPTCHA
-          try {
-            const ts = Date.now();
-            await page.screenshot({ path: `captcha_detected_${ts}.png`, fullPage: true });
-          } catch (e) {}
-          // Thử click vào các nút xác nhận phổ biến
-          const selectors = [
-            'button[type="submit"]',
-            'input[type="submit"]',
-            'button',
-            '#captchacharacters',
-            'input[type="text"]',
-            'input[type="checkbox"]',
-            '.g-recaptcha',
-            '#recaptcha-anchor',
-            '.recaptcha-checkbox',
-            '.h-captcha',
-            '.captcha',
-            '.a-button-input',
-            '.a-button-text',
-            '.a-link-emphasis'
-          ];
-          for (const sel of selectors) {
-            try {
-              const el = await page.$(sel);
-              if (el) {
-                await el.click({ delay: 100 + Math.random() * 200 });
-                await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
-              }
-            } catch (e) {}
-          }
-          // Thử reload lại trang
-          try {
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 2000);
-          } catch (e) {}
-          // Thử đổi user-agent
-          try {
-            const randomUA = this.USER_AGENTS[Math.floor(Math.random() * this.USER_AGENTS.length)];
-            await page.setUserAgent(randomUA);
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
-          } catch (e) {}
-          // Random delay trước khi retry
-          await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 3000);
+        if (content.toLowerCase().includes(keyword)) {
           return true;
         }
-      }
-      // Check for common CAPTCHA elements
-      const captchaSelectors = [
-        '[id*="captcha"]', '[class*="captcha"]', '[id*="robot"]', '[class*="robot"]',
-        '#captchacharacters', 'img[src*="captcha"]', 'form[action*="validateCaptcha"]',
-        '.g-recaptcha', '.h-captcha', '.recaptcha-checkbox', '#recaptcha-anchor'
-      ];
-      for (const selector of captchaSelectors) {
-        const element = await page.$(selector);
-        if (element) {
-          // Chụp ảnh màn hình khi phát hiện CAPTCHA
-          try {
-            const ts = Date.now();
-            await page.screenshot({ path: `captcha_detected_${ts}.png`, fullPage: true });
-          } catch (e) {}
-          // Thử click vào các nút xác nhận phổ biến
-          const clickSelectors = [
-            'button[type="submit"]',
-            'input[type="submit"]',
-            'button',
-            '#captchacharacters',
-            'input[type="text"]',
-            'input[type="checkbox"]',
-            '.g-recaptcha',
-            '#recaptcha-anchor',
-            '.recaptcha-checkbox',
-            '.h-captcha',
-            '.captcha',
-            '.a-button-input',
-            '.a-button-text',
-            '.a-link-emphasis'
-          ];
-          for (const sel of clickSelectors) {
-            try {
-              const el = await page.$(sel);
-              if (el) {
-                await el.click({ delay: 100 + Math.random() * 200 });
-                await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
-              }
-            } catch (e) {}
+        
+        // Also check for common CAPTCHA elements
+        const captchaSelectors = [
+          '[id*="captcha"]', 
+          '[class*="captcha"]', 
+          '[id*="robot"]',
+          '[class*="robot"]',
+          '#captchacharacters',
+          'img[src*="captcha"]',
+          'form[action*="validateCaptcha"]'
+        ];
+        
+        for (const selector of captchaSelectors) {
+          const element = await page.$(selector);
+          if (element) {
+            return true;
           }
-          // Thử reload lại trang
-          try {
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 2000);
-          } catch (e) {}
-          // Thử đổi user-agent
-          try {
-            const randomUA = this.USER_AGENTS[Math.floor(Math.random() * this.USER_AGENTS.length)];
-            await page.setUserAgent(randomUA);
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
-          } catch (e) {}
-          // Random delay trước khi retry
-          await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 2000 + Math.random() * 3000);
-          return true;
         }
       }
+      
       return false;
     } catch (error) {
       logger.warn(`Error checking for CAPTCHA: ${error}`);
       return false;
     }
   }
-
+  
   /**
    * Attempt to accept cookie consent if the banner is present
    */
@@ -852,12 +837,12 @@ class CrawlerService {
             
             if (isVisible) {
               // Add a small delay before clicking (more human-like)
-              await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 500 + Math.random() * 1000);
+              await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000)));
               await button.click();
               logger.info('Accepted cookie consent');
               
               // Wait a moment for the banner to disappear
-              await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 500 + Math.random() * 500);
+              await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 500)));
               return;
             }
           }
@@ -880,7 +865,7 @@ class CrawlerService {
       logger.info('Performing random user behavior to appear more human-like');
       
       // Wait a bit before performing actions
-      await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
+      await page.waitForFunction(`setTimeout(() => {}, ${1000 + Math.random() * 2000})`);
       
       const performScroll = (scrollCount: number) => {
         return page.evaluate((count) => {
@@ -947,14 +932,14 @@ class CrawlerService {
           try {
             // First try moving to the element
             await page.mouse.move(randomElement.x, randomElement.y);
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 500 + Math.random() * 1000);
+            await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000)));
             
             // Then try clicking
             await page.mouse.click(randomElement.x, randomElement.y, { button: 'left' });
             logger.info('Clicked on random element during user behavior simulation');
             
             // Wait a bit after clicking
-            await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 2000);
+            await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)));
           } catch (e) {
             // Just log the click error and continue - don't interrupt the crawl
             const errorMessage = e instanceof Error ? e.message : String(e);
@@ -1068,7 +1053,7 @@ class CrawlerService {
       });
       
       // Short final wait to ensure everything is rendered
-      await page.evaluate((ms: number) => new Promise(res => setTimeout(res, ms)), 1000 + Math.random() * 1000);
+      await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000)));
     } catch (error) {
       logger.warn(`Error waiting for dynamic content: ${error}`);
       // Continue anyway
@@ -1825,9 +1810,6 @@ class CrawlerService {
       return productData;
     }
   }
-}
-
-
 
   /**
    * Extract technical specifications directly from Amazon's product table
@@ -4110,14 +4092,14 @@ class CrawlerService {
     options: Record<string, any[]>,
     variants: any[],
     basePrice?: number,
-    priceRange?: {min: number; max: number}
+    priceRange?: {min: number, max: number}
   }> {
     return await page.evaluate(() => {
       const result: {
         options: Record<string, any[]>,
         variants: any[],
         basePrice?: number,
-        priceRange?: {min: number; max: number}
+        priceRange?: {min: number, max: number}
       } = {
         options: {},
         variants: []
@@ -4688,7 +4670,7 @@ class CrawlerService {
       options: Record<string, any[]>,
       variants: any[],
       basePrice?: number,
-      priceRange?: {min: number; max: number}
+      priceRange?: {min: number, max: number}
     } | null, 
     productData: ProductData
   ): void {
