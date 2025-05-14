@@ -82,8 +82,10 @@ class CrawlerService {
       }
       
       this.browser = await puppeteer.launch({
-        executablePath: '/usr/bin/chromium-browser', // hoặc '/usr/bin/chromium' tùy hệ điều hành
+        executablePath: '/usr/bin/chromium-browser', // hoặc '/usr/bin/chromium'
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        protocolTimeout: 120000, // 2 phút
+        timeout: 120000,         // 2 phút
       });
       
       // If we have proxy authentication, set it up
