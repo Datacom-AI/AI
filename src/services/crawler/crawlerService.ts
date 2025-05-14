@@ -81,7 +81,10 @@ class CrawlerService {
         launchOptions.args?.push(`--proxy-server=${config.crawler.proxyUrl}`);
       }
       
-      this.browser = await puppeteer.launch(launchOptions);
+      this.browser = await puppeteer.launch({
+        executablePath: '/usr/bin/chromium-browser', // hoặc '/usr/bin/chromium' tùy hệ điều hành
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
       
       // If we have proxy authentication, set it up
       if (config.crawler.useProxy && 
@@ -1033,8 +1036,8 @@ class CrawlerService {
           
           if (priceData.discountedFrom) {
             productData.metadata.original_price = priceData.discountedFrom;
-            productData.metadata.discount_amount = priceData.discountedFrom - priceData.price;
-            productData.metadata.discount_percentage = Math.round((priceData.discountedFrom - priceData.price) / priceData.discountedFrom * 100);
+            productData.metadata.discount_amount = priceData.discountedFrom - productData.price;
+            productData.metadata.discount_percentage = Math.round((priceData.discountedFrom - productData.price) / priceData.discountedFrom * 100);
           }
           
           if (priceData.salePrices && Object.keys(priceData.salePrices).length > 0) {
@@ -4644,9 +4647,10 @@ class CrawlerService {
     // Clean variants similarly
     if (optionsData.variants && optionsData.variants.length > 0) {
       const formRelatedPatterns = [
-        /price.*availability/i, /website/i, /url/i, /shipping/i, /cost/i, 
-        /date/i, /store/i, /city/i, /state/i, /province/i, /submit/i, 
-        /feedback/i, /mm\/dd/i, /\d{2}\/\d{2}/i, /online/i, /offline/i
+        /price.*availability/i, /website/i, /url/i, /shipping cost/i, 
+        /date of.*price/i, /store name/i, /city/i, /state/i, /province/i, /submit/i, 
+        /feedback/i, /mm\/dd/i, /\d{2}\/\d{2}\/\d{4}/i, 
+        /online/i, /offline/i, /please select/i, /enter the/i, /where you found/i
       ];
       
       const cleanedVariants = optionsData.variants.filter(variant => {
@@ -5458,4 +5462,4 @@ export default function getCrawlerService(): CrawlerService {
     instance = new CrawlerService();
   }
   return instance;
-} 
+}
