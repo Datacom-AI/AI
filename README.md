@@ -26,7 +26,7 @@ This is the backend service for the AI Web Crawler feature of the CPG Matching p
 1. Clone the repository
 2. Navigate to the server directory:
    ```
-   cd cpg-matching-v2/server
+   cd AI
    ```
 3. Install dependencies:
    ```
