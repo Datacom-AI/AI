@@ -1,4 +1,6 @@
-import puppeteer, { Browser, Page, PuppeteerLaunchOptions } from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { Browser, Page, PuppeteerLaunchOptions } from 'puppeteer';
 import { CrawlTaskDocument } from '../../models/crawler/crawlTask';
 import CrawlResult, { ProductData } from '../../models/crawler/crawlResult';
 import logger from '../../utils/logger';
@@ -7,6 +9,8 @@ import path from 'path';
 import fs from 'fs';
 import { randomInt } from 'crypto';
 import { CrawledProduct } from '../../models/product';
+
+puppeteer.use(StealthPlugin());
 
 class CrawlerService {
   private browser: Browser | null = null;
@@ -48,9 +52,10 @@ class CrawlerService {
       // Set up browser launch options with advanced stealth settings
       const launchOptions: PuppeteerLaunchOptions = {
         headless: true,
+        executablePath: '/usr/bin/chromium-browser', // hoặc '/usr/bin/chromium'
         args: [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox', 
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--window-size=1920,1080',
@@ -72,7 +77,9 @@ class CrawlerService {
           '--ignore-certificate-errors-spki-list',
           `--window-size=${1440 + Math.floor(Math.random() * 100)},${900 + Math.floor(Math.random() * 100)}`,
         ],
-        defaultViewport: { width: 1440, height: 900 }
+        defaultViewport: { width: 1440, height: 900 },
+        protocolTimeout: 300000, // 5 phút
+        timeout: 300000,         // 5 phút
       };
       
       // Add proxy if configured
@@ -81,12 +88,7 @@ class CrawlerService {
         launchOptions.args?.push(`--proxy-server=${config.crawler.proxyUrl}`);
       }
       
-      this.browser = await puppeteer.launch({
-        executablePath: '/usr/bin/chromium-browser', // hoặc '/usr/bin/chromium'
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        protocolTimeout: 120000, // 2 phút
-        timeout: 120000,         // 2 phút
-      });
+      this.browser = await puppeteer.launch(launchOptions);
       
       // If we have proxy authentication, set it up
       if (config.crawler.useProxy && 
@@ -248,7 +250,9 @@ class CrawlerService {
                 '--ignore-certificate-errors-spki-list',
                 `--window-size=${1440 + Math.floor(Math.random() * 100)},${900 + Math.floor(Math.random() * 100)}`,
               ],
-              defaultViewport: { width: 1440, height: 900 }
+              defaultViewport: { width: 1440, height: 900 },
+              protocolTimeout: 300000, // 5 phút
+              timeout: 300000,         // 5 phút
             };
             this.browser = await puppeteer.launch(directLaunchOptions);
             page = await this.browser.newPage();
@@ -705,23 +709,23 @@ class CrawlerService {
         if (content.toLowerCase().includes(keyword)) {
           return true;
         }
-      }
-      
-      // Also check for common CAPTCHA elements
-      const captchaSelectors = [
-        '[id*="captcha"]', 
-        '[class*="captcha"]', 
-        '[id*="robot"]',
-        '[class*="robot"]',
-        '#captchacharacters',
-        'img[src*="captcha"]',
-        'form[action*="validateCaptcha"]'
-      ];
-      
-      for (const selector of captchaSelectors) {
-        const element = await page.$(selector);
-        if (element) {
-          return true;
+        
+        // Also check for common CAPTCHA elements
+        const captchaSelectors = [
+          '[id*="captcha"]', 
+          '[class*="captcha"]', 
+          '[id*="robot"]',
+          '[class*="robot"]',
+          '#captchacharacters',
+          'img[src*="captcha"]',
+          'form[action*="validateCaptcha"]'
+        ];
+        
+        for (const selector of captchaSelectors) {
+          const element = await page.$(selector);
+          if (element) {
+            return true;
+          }
         }
       }
       
