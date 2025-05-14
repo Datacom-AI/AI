@@ -702,40 +702,123 @@ class CrawlerService {
       const captchaKeywords = [
         'captcha', 'robot check', 'human verification', 'security check', 
         'prove you are human', 'automated access', 'suspicious activity',
-        'bot behavior', 'enter the characters', 'enter the letters'
+        'bot behavior', 'enter the characters', 'enter the letters',
+        'Type the characters you see', 'Enter the characters as they are shown in the image',
+        'Sorry, we just need to make sure you\'re not a robot.'
       ];
-      
+      // Check for keywords
       for (const keyword of captchaKeywords) {
-        if (content.toLowerCase().includes(keyword)) {
+        if (content.toLowerCase().includes(keyword.toLowerCase())) {
+          // Chụp ảnh màn hình khi phát hiện CAPTCHA
+          try {
+            const ts = Date.now();
+            await page.screenshot({ path: `captcha_detected_${ts}.png`, fullPage: true });
+          } catch (e) {}
+          // Thử click vào các nút xác nhận phổ biến
+          const selectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button',
+            '#captchacharacters',
+            'input[type="text"]',
+            'input[type="checkbox"]',
+            '.g-recaptcha',
+            '#recaptcha-anchor',
+            '.recaptcha-checkbox',
+            '.h-captcha',
+            '.captcha',
+            '.a-button-input',
+            '.a-button-text',
+            '.a-link-emphasis'
+          ];
+          for (const sel of selectors) {
+            try {
+              const el = await page.$(sel);
+              if (el) {
+                await el.click({ delay: 100 + Math.random() * 200 });
+                await page.waitForTimeout(1000 + Math.random() * 2000);
+              }
+            } catch (e) {}
+          }
+          // Thử reload lại trang
+          try {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.waitForTimeout(2000 + Math.random() * 2000);
+          } catch (e) {}
+          // Thử đổi user-agent
+          try {
+            const randomUA = this.USER_AGENTS[Math.floor(Math.random() * this.USER_AGENTS.length)];
+            await page.setUserAgent(randomUA);
+            await page.waitForTimeout(1000 + Math.random() * 2000);
+          } catch (e) {}
+          // Random delay trước khi retry
+          await page.waitForTimeout(2000 + Math.random() * 3000);
           return true;
         }
-        
-        // Also check for common CAPTCHA elements
-        const captchaSelectors = [
-          '[id*="captcha"]', 
-          '[class*="captcha"]', 
-          '[id*="robot"]',
-          '[class*="robot"]',
-          '#captchacharacters',
-          'img[src*="captcha"]',
-          'form[action*="validateCaptcha"]'
-        ];
-        
-        for (const selector of captchaSelectors) {
-          const element = await page.$(selector);
-          if (element) {
-            return true;
+      }
+      // Check for common CAPTCHA elements
+      const captchaSelectors = [
+        '[id*="captcha"]', '[class*="captcha"]', '[id*="robot"]', '[class*="robot"]',
+        '#captchacharacters', 'img[src*="captcha"]', 'form[action*="validateCaptcha"]',
+        '.g-recaptcha', '.h-captcha', '.recaptcha-checkbox', '#recaptcha-anchor'
+      ];
+      for (const selector of captchaSelectors) {
+        const element = await page.$(selector);
+        if (element) {
+          // Chụp ảnh màn hình khi phát hiện CAPTCHA
+          try {
+            const ts = Date.now();
+            await page.screenshot({ path: `captcha_detected_${ts}.png`, fullPage: true });
+          } catch (e) {}
+          // Thử click vào các nút xác nhận phổ biến
+          const clickSelectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button',
+            '#captchacharacters',
+            'input[type="text"]',
+            'input[type="checkbox"]',
+            '.g-recaptcha',
+            '#recaptcha-anchor',
+            '.recaptcha-checkbox',
+            '.h-captcha',
+            '.captcha',
+            '.a-button-input',
+            '.a-button-text',
+            '.a-link-emphasis'
+          ];
+          for (const sel of clickSelectors) {
+            try {
+              const el = await page.$(sel);
+              if (el) {
+                await el.click({ delay: 100 + Math.random() * 200 });
+                await page.waitForTimeout(1000 + Math.random() * 2000);
+              }
+            } catch (e) {}
           }
+          // Thử reload lại trang
+          try {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.waitForTimeout(2000 + Math.random() * 2000);
+          } catch (e) {}
+          // Thử đổi user-agent
+          try {
+            const randomUA = this.USER_AGENTS[Math.floor(Math.random() * this.USER_AGENTS.length)];
+            await page.setUserAgent(randomUA);
+            await page.waitForTimeout(1000 + Math.random() * 2000);
+          } catch (e) {}
+          // Random delay trước khi retry
+          await page.waitForTimeout(2000 + Math.random() * 3000);
+          return true;
         }
       }
-      
       return false;
     } catch (error) {
       logger.warn(`Error checking for CAPTCHA: ${error}`);
       return false;
     }
   }
-  
+
   /**
    * Attempt to accept cookie consent if the banner is present
    */
@@ -4024,14 +4107,14 @@ class CrawlerService {
     options: Record<string, any[]>,
     variants: any[],
     basePrice?: number,
-    priceRange?: {min: number, max: number}
+    priceRange?: {min: number; max: number}
   }> {
     return await page.evaluate(() => {
       const result: {
         options: Record<string, any[]>,
         variants: any[],
         basePrice?: number,
-        priceRange?: {min: number, max: number}
+        priceRange?: {min: number; max: number}
       } = {
         options: {},
         variants: []
@@ -4602,7 +4685,7 @@ class CrawlerService {
       options: Record<string, any[]>,
       variants: any[],
       basePrice?: number,
-      priceRange?: {min: number, max: number}
+      priceRange?: {min: number; max: number}
     } | null, 
     productData: ProductData
   ): void {
