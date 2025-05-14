@@ -5,24 +5,33 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: cpg_ai_server
     ports:
       - "5000:5000"
     environment:
       - PORT=5000
       - MONGODB_URI=mongodb://mongodb:27017/cpg_crawler
       - NODE_ENV=production
+
+      # AI Providers
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - AI_PROVIDER=${AI_PROVIDER}
+
+      # AWS Claude
       - AWS_REGION=${AWS_REGION}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_CLAUDE_MODEL=${AWS_CLAUDE_MODEL}
       - USE_AWS_CLAUDE=${USE_AWS_CLAUDE}
+
+      # Proxy (optional)
       - USE_PROXY=${USE_PROXY}
       - PROXY_URL=${PROXY_URL}
       - PROXY_USERNAME=${PROXY_USERNAME}
       - PROXY_PASSWORD=${PROXY_PASSWORD}
+
+      # Crawler configs
       - SAVE_SCREENSHOTS=${SAVE_SCREENSHOTS}
       - SCREENSHOT_PATH=${SCREENSHOT_PATH}
       - NAVIGATION_TIMEOUT=${NAVIGATION_TIMEOUT}
@@ -30,19 +39,23 @@ services:
       - USER_AGENT=${USER_AGENT}
       - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS}
       - QUEUE_RETRY_DELAY=${QUEUE_RETRY_DELAY}
+
     volumes:
       - ./logs:/app/logs
     depends_on:
       - mongodb
+    restart: always
     networks:
       - cpg-network
 
   mongodb:
-    image: mongo:latest
+    image: mongo:6.0
+    container_name: cpg_mongodb
     ports:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    restart: always
     networks:
       - cpg-network
 
@@ -51,4 +64,4 @@ volumes:
 
 networks:
   cpg-network:
-    driver: bridge 
+    driver: bridge
